@@ -22,7 +22,7 @@ export default function AdminWorkOrders() {
     queryKey: ['adminWorkOrders', filterStatus],
     queryFn: async () => {
       const res = await getWorkOrders(filterStatus || undefined);
-      return res.data;
+      return res.data.work_orders;
     },
   });
 
