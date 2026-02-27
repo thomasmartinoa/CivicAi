@@ -1,4 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
+import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 import { getPublicDashboard } from '../../services/api';
 import type { DashboardStats } from '../../types';
 import {
@@ -8,6 +10,18 @@ import {
 import type { PieLabelRenderProps } from 'recharts';
 
 const PIE_COLORS = ['#1e3a5f', '#2563eb', '#16a34a', '#eab308', '#ef4444', '#8b5cf6', '#6b7280'];
+
+const RISK_COLOR: Record<string, string> = {
+  critical: '#ef4444',
+  high: '#f97316',
+  medium: '#eab308',
+  low: '#16a34a',
+};
+
+function getRiskColor(status: string) {
+  if (status === 'resolved' || status === 'closed') return '#16a34a';
+  return RISK_COLOR['medium'];
+}
 
 export default function PublicDashboard() {
   const { data, isLoading, isError } = useQuery<DashboardStats>({
@@ -54,7 +68,7 @@ export default function PublicDashboard() {
         <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
           <p className="text-sm text-gray-500 mb-1">Resolution Rate</p>
           <p className="text-4xl font-bold text-purple-600">
-            {(data.resolution_rate * 100).toFixed(1)}%
+            {data.resolution_rate.toFixed(1)}%
           </p>
         </div>
       </div>
@@ -107,6 +121,50 @@ export default function PublicDashboard() {
           )}
         </div>
       </div>
+
+      {/* Complaint Heatmap */}
+      {data.heatmap_data && data.heatmap_data.length > 0 && (
+        <div className="mt-6 bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-gray-800 mb-4">
+            Complaint Map
+            <span className="ml-2 text-sm font-normal text-gray-400">({data.heatmap_data.length} geotagged complaints)</span>
+          </h2>
+          <div className="rounded-lg overflow-hidden" style={{ height: 400 }}>
+            <MapContainer
+              center={[data.heatmap_data[0].lat, data.heatmap_data[0].lng]}
+              zoom={12}
+              style={{ height: '100%', width: '100%' }}
+              scrollWheelZoom={false}
+            >
+              <TileLayer
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+              {data.heatmap_data.map((point, i) => (
+                <CircleMarker
+                  key={i}
+                  center={[point.lat, point.lng]}
+                  radius={8}
+                  pathOptions={{
+                    color: getRiskColor(point.status),
+                    fillColor: getRiskColor(point.status),
+                    fillOpacity: 0.7,
+                  }}
+                >
+                  <Popup>
+                    <strong>{point.category}</strong><br />
+                    Status: {point.status}
+                  </Popup>
+                </CircleMarker>
+              ))}
+            </MapContainer>
+          </div>
+          <div className="flex gap-4 mt-3 text-xs text-gray-500">
+            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-green-500"></span> Resolved</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-yellow-400"></span> In Progress</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

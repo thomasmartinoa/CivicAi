@@ -6,7 +6,7 @@ class ValidationAgent(BaseAgent):
     def __init__(self):
         super().__init__(name="ValidationAgent")
 
-    async def process(self, context: PipelineContext) -> PipelineContext:
+    async def process(self, context: PipelineContext, db=None) -> PipelineContext:
         description = context.data.get("description", "")
 
         if not description or len(description.strip()) < 10:

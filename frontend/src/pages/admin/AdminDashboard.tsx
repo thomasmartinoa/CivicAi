@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
-import { getAnalytics } from '../../services/api';
-import type { Analytics } from '../../types';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { getAnalytics, getPerformanceMetrics } from '../../services/api';
+import type { Analytics, PerformanceMetrics } from '../../types';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
@@ -11,12 +12,37 @@ import type { PieLabelRenderProps } from 'recharts';
 const PIE_COLORS = ['#16a34a', '#eab308', '#f97316', '#ef4444', '#6b7280'];
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!localStorage.getItem('admin_token')) {
+      navigate('/admin/login');
+    }
+  }, [navigate]);
+
+  const handleLogout = () => {
+    localStorage.removeItem('admin_token');
+    queryClient.clear();
+    navigate('/admin/login');
+  };
+
   const { data, isLoading, isError } = useQuery<Analytics>({
     queryKey: ['adminAnalytics'],
     queryFn: async () => {
       const res = await getAnalytics();
       return res.data;
     },
+    retry: false,
+  });
+
+  const { data: perf } = useQuery<PerformanceMetrics>({
+    queryKey: ['adminPerformance'],
+    queryFn: async () => {
+      const res = await getPerformanceMetrics();
+      return res.data;
+    },
+    retry: false,
   });
 
   if (isLoading) {
@@ -54,6 +80,9 @@ export default function AdminDashboard() {
           <Link to="/admin/work-orders" className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm">
             View Work Orders
           </Link>
+          <button onClick={handleLogout} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition text-sm">
+            Logout
+          </button>
         </div>
       </div>
 
@@ -123,6 +152,75 @@ export default function AdminDashboard() {
           )}
         </div>
       </div>
+
+      {/* Performance Metrics */}
+      {perf && (
+        <div className="mt-6 space-y-4">
+          <h2 className="text-xl font-bold text-gray-800">Performance Metrics</h2>
+
+          {/* SLA & Escalations KPIs */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+              <p className="text-sm text-gray-500 mb-1">SLA Breach Rate</p>
+              <p className={`text-3xl font-bold ${perf.sla_breach_rate_percent > 20 ? 'text-red-600' : 'text-green-600'}`}>
+                {perf.sla_breach_rate_percent}%
+              </p>
+              <p className="text-xs text-gray-400 mt-1">{perf.sla_breaches} of {perf.sla_total_measured} orders</p>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+              <p className="text-sm text-gray-500 mb-1">Total Escalations</p>
+              <p className="text-3xl font-bold text-orange-600">{perf.total_escalations}</p>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+              <p className="text-sm text-gray-500 mb-1">Contractors Active</p>
+              <p className="text-3xl font-bold text-blue-900">{perf.contractor_performance.length}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Avg Resolution Time by Category */}
+            {Object.keys(perf.avg_resolution_hours_by_category).length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                <h3 className="text-base font-semibold text-gray-800 mb-4">Avg Resolution Time (hours) by Category</h3>
+                <ResponsiveContainer width="100%" height={250}>
+                  <BarChart data={Object.entries(perf.avg_resolution_hours_by_category).map(([name, value]) => ({ name, value }))}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" angle={-30} textAnchor="end" height={80} fontSize={11} />
+                    <YAxis />
+                    <Tooltip formatter={(v) => [`${v}h`, 'Avg Hours']} />
+                    <Bar dataKey="value" fill="#16a34a" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {/* Contractor Performance Table */}
+            {perf.contractor_performance.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                <h3 className="text-base font-semibold text-gray-800 mb-4">Contractor Performance</h3>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-left text-gray-500">
+                      <th className="pb-2 font-medium">Contractor</th>
+                      <th className="pb-2 font-medium">Completed</th>
+                      <th className="pb-2 font-medium">Avg Hours</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {perf.contractor_performance.map((c) => (
+                      <tr key={c.contractor_id} className="border-b border-gray-100 hover:bg-gray-50">
+                        <td className="py-2 text-gray-800">{c.name}</td>
+                        <td className="py-2 text-gray-600">{c.completed_orders}</td>
+                        <td className="py-2 text-gray-600">{c.avg_resolution_hours}h</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
