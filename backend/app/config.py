@@ -10,7 +10,8 @@ class Settings(BaseSettings):
 
     anthropic_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
-    llm_provider: str = "anthropic"
+    gemini_api_key: Optional[str] = None
+    llm_provider: str = "gemini"  # "gemini", "anthropic", or "openai"
 
     smtp_host: str = "localhost"
     smtp_port: int = 1025

@@ -12,7 +12,10 @@
       "Bash(docker-compose up:*)",
       "Bash(docker:*)",
       "Bash(curl:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(taskkill:*)"
     ]
   }
 }
