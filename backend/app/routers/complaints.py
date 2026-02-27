@@ -38,17 +38,17 @@ async def submit_complaint(
     db: Session = Depends(get_db),
 ):
     tracking_id = generate_tracking_id()
-    complaint_id = uuid.uuid4()
+    complaint_id = str(uuid.uuid4())
 
     media_files = []
     for f in files:
-        saved = await media_service.save_file(f, str(complaint_id))
+        saved = await media_service.save_file(f, complaint_id)
         media_files.append(saved)
 
     complaint = Complaint(
         id=complaint_id,
         tracking_id=tracking_id,
-        tenant_id=uuid.UUID(tenant_id) if tenant_id else None,
+        tenant_id=tenant_id if tenant_id else None,
         citizen_email=citizen_email,
         citizen_phone=citizen_phone,
         citizen_name=citizen_name,
@@ -110,8 +110,8 @@ async def submit_complaint(
             from datetime import datetime
             wo = WorkOrderModel(
                 complaint_id=complaint_id,
-                tenant_id=uuid.UUID(tenant_id) if tenant_id else None,
-                contractor_id=uuid.UUID(result.work_order["contractor_id"]) if result.work_order.get("contractor_id") else None,
+                tenant_id=tenant_id if tenant_id else None,
+                contractor_id=result.work_order.get("contractor_id"),
                 status="created",
                 sla_deadline=datetime.fromisoformat(result.work_order["sla_deadline"]) if result.work_order.get("sla_deadline") else None,
                 estimated_cost=result.work_order.get("estimated_cost"),

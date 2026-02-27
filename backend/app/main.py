@@ -6,15 +6,18 @@ from sqlalchemy.orm import Session
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import settings
-from app.database import get_db, SessionLocal
+from app.database import get_db, SessionLocal, create_tables
 from app.routers import auth, complaints, admin, public
 from app.agents.tracker import check_sla_deadlines
+from app.models import *  # noqa: F401,F403 - ensure all models are loaded
 
 scheduler = AsyncIOScheduler()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Create tables (for SQLite dev mode)
+    create_tables()
     scheduler.add_job(
         lambda: check_sla_deadlines(SessionLocal()),
         "interval",

@@ -68,7 +68,7 @@ async def update_complaint(
     if contractor_id:
         wo = db.query(WorkOrder).filter(WorkOrder.complaint_id == complaint.id).first()
         if wo:
-            wo.contractor_id = uuid.UUID(contractor_id)
+            wo.contractor_id = contractor_id
             wo.officer_id = user.id
     db.commit()
     return {"message": "Complaint updated"}

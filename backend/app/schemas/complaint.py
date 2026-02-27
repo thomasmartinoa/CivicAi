@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -16,7 +15,7 @@ class ComplaintCreate(BaseModel):
 
 
 class ComplaintResponse(BaseModel):
-    id: uuid.UUID
+    id: str
     tracking_id: str
     status: str
     description: str

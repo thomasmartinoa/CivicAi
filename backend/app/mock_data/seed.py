@@ -11,7 +11,7 @@ def seed_database(db: Session):
     if db.query(Tenant).first():
         return {"message": "Database already seeded"}
 
-    tenant = Tenant(id=uuid.uuid4(), name="Bangalore Municipal Corporation",
+    tenant = Tenant(id=str(uuid.uuid4()), name="Bangalore Municipal Corporation",
         config={"sla_hours": {"critical": 4, "high": 24, "medium": 72, "low": 168}})
     db.add(tenant)
 

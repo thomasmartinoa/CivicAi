@@ -1,7 +1,18 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)",
+      "Bash(alembic init:*)",
+      "Bash(python:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker:*)",
+      "Bash(curl:*)",
+      "Bash(rm:*)"
     ]
   }
 }
