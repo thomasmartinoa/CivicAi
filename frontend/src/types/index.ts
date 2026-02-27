@@ -61,3 +61,17 @@ export interface Analytics {
   by_category: Record<string, number>;
   by_risk_level: Record<string, number>;
 }
+
+export interface PerformanceMetrics {
+  avg_resolution_hours_by_category: Record<string, number>;
+  sla_breach_rate_percent: number;
+  sla_breaches: number;
+  sla_total_measured: number;
+  contractor_performance: Array<{
+    contractor_id: string;
+    name: string;
+    completed_orders: number;
+    avg_resolution_hours: number;
+  }>;
+  total_escalations: number;
+}

@@ -1,28 +1,33 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { getWorkOrders, updateWorkOrder } from '../../services/api';
 import type { WorkOrder } from '../../types';
 
 const statusColor: Record<string, string> = {
-  pending: 'bg-gray-100 text-gray-700',
+  created: 'bg-gray-100 text-gray-700',
   assigned: 'bg-blue-100 text-blue-800',
   in_progress: 'bg-yellow-100 text-yellow-800',
   completed: 'bg-green-100 text-green-800',
   cancelled: 'bg-red-100 text-red-700',
 };
 
-const STATUS_OPTIONS = ['pending', 'assigned', 'in_progress', 'completed', 'cancelled'];
+const STATUS_OPTIONS = ['created', 'assigned', 'in_progress', 'completed', 'cancelled'];
 
 export default function AdminWorkOrders() {
+  const navigate = useNavigate();
   const [filterStatus, setFilterStatus] = useState('');
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!localStorage.getItem('admin_token')) navigate('/admin/login');
+  }, [navigate]);
 
   const { data, isLoading, isError } = useQuery<WorkOrder[]>({
     queryKey: ['adminWorkOrders', filterStatus],
     queryFn: async () => {
       const res = await getWorkOrders(filterStatus || undefined);
-      return res.data;
+      return res.data.work_orders;
     },
   });
 

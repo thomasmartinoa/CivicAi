@@ -10,8 +10,17 @@ from app.database import get_db, SessionLocal, create_tables
 from app.routers import auth, complaints, admin, public
 from app.agents.tracker import check_sla_deadlines
 from app.models import *  # noqa: F401,F403 - ensure all models are loaded
+from app.utils.auth import require_officer_or_admin
 
 scheduler = AsyncIOScheduler()
+
+
+async def run_sla_check():
+    db = SessionLocal()
+    try:
+        await check_sla_deadlines(db)
+    finally:
+        db.close()
 
 
 @asynccontextmanager
@@ -19,7 +28,7 @@ async def lifespan(app: FastAPI):
     # Create tables (for SQLite dev mode)
     create_tables()
     scheduler.add_job(
-        lambda: check_sla_deadlines(SessionLocal()),
+        run_sla_check,
         "interval",
         minutes=5,
     )
@@ -37,7 +46,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

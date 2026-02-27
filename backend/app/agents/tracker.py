@@ -15,7 +15,10 @@ class TrackingAgent(BaseAgent):
         citizen_email = context.data.get("citizen_email", "")
 
         if citizen_email:
-            await email_service.send_complaint_confirmation(citizen_email, tracking_id)
+            await email_service.send_complaint_confirmation(
+                citizen_email, tracking_id,
+                complaint_id=context.complaint_id, db=db
+            )
 
         await ws_manager.send_update(tracking_id, {
             "type": "status_update",
@@ -42,7 +45,7 @@ async def check_sla_deadlines(db: Session):
 
     now = datetime.now(timezone.utc)
     active_orders = db.query(WorkOrder).filter(
-        WorkOrder.status.in_(["created", "accepted", "in_progress"])
+        WorkOrder.status.in_(["created", "assigned", "in_progress"])
     ).all()
 
     for order in active_orders:
@@ -50,13 +53,25 @@ async def check_sla_deadlines(db: Session):
         complaint = db.query(Complaint).filter(Complaint.id == order.complaint_id).first()
         if not complaint: continue
 
-        time_remaining = (order.sla_deadline - now).total_seconds()
-        total_time = (order.sla_deadline - order.created_at).total_seconds()
+        # Make naive datetimes (SQLite) timezone-aware
+        sla_deadline = order.sla_deadline
+        if sla_deadline.tzinfo is None:
+            sla_deadline = sla_deadline.replace(tzinfo=timezone.utc)
+        created_at = order.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+
+        time_remaining = (sla_deadline - now).total_seconds()
+        total_time = (sla_deadline - created_at).total_seconds()
         if total_time <= 0: continue
         elapsed_pct = 1 - (time_remaining / total_time)
 
         if 0.75 <= elapsed_pct < 1.0:
-            await email_service.send_status_update(complaint.citizen_email, complaint.tracking_id, "SLA warning - escalating priority")
+            await email_service.send_status_update(
+                complaint.citizen_email, complaint.tracking_id,
+                "SLA warning - escalating priority",
+                complaint_id=complaint.id, db=db,
+            )
         elif elapsed_pct >= 1.0:
             current_level = complaint.ward and "ward" or complaint.block and "block" or "district"
             next_level = JURISDICTION_ESCALATION.get(current_level, "state")
@@ -66,4 +81,8 @@ async def check_sla_deadlines(db: Session):
             )
             db.add(escalation)
             db.commit()
-            await email_service.send_status_update(complaint.citizen_email, complaint.tracking_id, f"Escalated to {next_level} level due to SLA breach")
+            await email_service.send_status_update(
+                complaint.citizen_email, complaint.tracking_id,
+                f"Escalated to {next_level} level due to SLA breach",
+                complaint_id=complaint.id, db=db,
+            )

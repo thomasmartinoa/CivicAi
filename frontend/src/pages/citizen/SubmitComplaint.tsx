@@ -13,7 +13,35 @@ export default function SubmitComplaint() {
   const [files, setFiles] = useState<File[]>([]);
   const [trackingId, setTrackingId] = useState<string | null>(null);
   const [gpsLoading, setGpsLoading] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<BlobPart[]>([]);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const mr = new MediaRecorder(stream);
+      mediaRecorderRef.current = mr;
+      mr.ondataavailable = (e) => audioChunksRef.current.push(e.data);
+      mr.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        setAudioBlob(blob);
+        stream.getTracks().forEach((t) => t.stop());
+      };
+      mr.start();
+      setRecording(true);
+    } catch {
+      alert('Microphone access denied.');
+    }
+  };
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+    setRecording(false);
+  };
 
   const mutation = useMutation({
     mutationFn: (formData: FormData) => submitComplaint(formData),
@@ -53,7 +81,10 @@ export default function SubmitComplaint() {
     if (address) fd.append('address', address);
     if (lat) fd.append('latitude', lat);
     if (lng) fd.append('longitude', lng);
-    files.forEach((f) => fd.append('attachments', f));
+    files.forEach((f) => fd.append('files', f));
+    if (audioBlob) {
+      fd.append('files', new File([audioBlob], 'voice_complaint.webm', { type: 'audio/webm' }));
+    }
     mutation.mutate(fd);
   };
 
@@ -172,6 +203,43 @@ export default function SubmitComplaint() {
           >
             {files.length > 0 ? `${files.length} file(s) selected` : 'Click to upload photos or documents'}
           </button>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Voice Complaint</label>
+          <div className="flex items-center gap-3">
+            {!recording ? (
+              <button
+                type="button"
+                onClick={startRecording}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+              >
+                <span className="w-3 h-3 rounded-full bg-white inline-block"></span>
+                Record Audio
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={stopRecording}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 transition animate-pulse"
+              >
+                <span className="w-3 h-3 rounded bg-red-500 inline-block"></span>
+                Stop Recording
+              </button>
+            )}
+            {audioBlob && !recording && (
+              <div className="flex items-center gap-2">
+                <audio controls src={URL.createObjectURL(audioBlob)} className="h-8" />
+                <button
+                  type="button"
+                  onClick={() => setAudioBlob(null)}
+                  className="text-xs text-red-500 hover:underline"
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {mutation.isError && (

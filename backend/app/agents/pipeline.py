@@ -14,7 +14,7 @@ class ComplaintPipeline:
         for agent in self.agents:
             try:
                 agent.log(f"Processing complaint {context.complaint_id}")
-                context = await agent.process(context)
+                context = await agent.process(context, db)
                 if context.errors:
                     agent.log(f"Errors: {context.errors}")
                     break

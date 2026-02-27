@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { getAdminComplaints } from '../../services/api';
 import type { Complaint } from '../../types';
 
@@ -22,10 +22,15 @@ const riskColor: Record<string, string> = {
 };
 
 export default function AdminComplaints() {
+  const navigate = useNavigate();
   const [statusFilter, setStatusFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [riskFilter, setRiskFilter] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!localStorage.getItem('admin_token')) navigate('/admin/login');
+  }, [navigate]);
 
   const params: Record<string, string> = {};
   if (statusFilter) params.status = statusFilter;
@@ -36,7 +41,7 @@ export default function AdminComplaints() {
     queryKey: ['adminComplaints', params],
     queryFn: async () => {
       const res = await getAdminComplaints(params);
-      return res.data;
+      return res.data.complaints;
     },
   });
 
@@ -78,13 +83,18 @@ export default function AdminComplaints() {
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
         >
           <option value="">All Categories</option>
-          <option value="roads">Roads</option>
-          <option value="water">Water</option>
-          <option value="sanitation">Sanitation</option>
-          <option value="electricity">Electricity</option>
-          <option value="parks">Parks</option>
-          <option value="noise">Noise</option>
-          <option value="other">Other</option>
+          <option value="ROADS">Roads</option>
+          <option value="WATER">Water</option>
+          <option value="SANITATION">Sanitation</option>
+          <option value="ELECTRICITY">Electricity</option>
+          <option value="PUBLIC_SPACES">Public Spaces</option>
+          <option value="HEALTH">Health</option>
+          <option value="FLOODING">Flooding</option>
+          <option value="FIRE_HAZARD">Fire Hazard</option>
+          <option value="CONSTRUCTION">Construction</option>
+          <option value="STRAY_ANIMALS">Stray Animals</option>
+          <option value="SEWAGE">Sewage</option>
+          <option value="EDUCATION">Education</option>
         </select>
         <select
           value={riskFilter}

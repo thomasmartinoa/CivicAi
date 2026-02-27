@@ -40,6 +40,13 @@ async def submit_complaint(
     tracking_id = generate_tracking_id()
     complaint_id = str(uuid.uuid4())
 
+    # Auto-assign default tenant if none provided
+    if not tenant_id:
+        from app.models.tenant import Tenant
+        default_tenant = db.query(Tenant).first()
+        if default_tenant:
+            tenant_id = str(default_tenant.id)
+
     media_files = []
     for f in files:
         saved = await media_service.save_file(f, complaint_id)
@@ -137,11 +144,15 @@ async def track_complaint(tracking_id: str, db: Session = Depends(get_db)):
     return complaint
 
 
-@router.post("/verify-email", response_model=MessageResponse)
+@router.post("/verify-email")
 async def request_otp(data: OTPRequest):
     otp = otp_service.generate_otp(data.email)
-    await email_service.send_otp(data.email, otp)
-    return MessageResponse(message="OTP sent to your email")
+    sent = await email_service.send_otp(data.email, otp)
+    if not sent:
+        # SMTP not configured — return OTP directly for dev/demo use
+        print(f"[DEV] OTP for {data.email}: {otp}")
+        return {"message": "OTP generated (email not configured)", "dev_otp": otp}
+    return {"message": "OTP sent to your email"}
 
 
 @router.post("/verify-otp")

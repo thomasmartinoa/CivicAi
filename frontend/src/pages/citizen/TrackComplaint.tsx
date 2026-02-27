@@ -57,6 +57,7 @@ export default function TrackComplaint() {
   const [otpSent, setOtpSent] = useState(false);
   const [verified, setVerified] = useState(false);
   const [myComplaints, setMyComplaints] = useState<Complaint[]>([]);
+  const [devOtp, setDevOtp] = useState<string | null>(null);
 
   const trackMutation = useMutation({
     mutationFn: () => trackComplaint(trackingId),
@@ -64,7 +65,13 @@ export default function TrackComplaint() {
 
   const otpMutation = useMutation({
     mutationFn: () => requestOTP(email),
-    onSuccess: () => setOtpSent(true),
+    onSuccess: (res) => {
+      setOtpSent(true);
+      if (res.data?.dev_otp) {
+        setOtp(res.data.dev_otp);
+        setDevOtp(res.data.dev_otp);
+      }
+    },
   });
 
   const verifyMutation = useMutation({
@@ -72,7 +79,7 @@ export default function TrackComplaint() {
     onSuccess: async () => {
       setVerified(true);
       const res = await getMyComplaints(email);
-      setMyComplaints(res.data);
+      setMyComplaints(res.data.complaints);
     },
   });
 
@@ -138,21 +145,31 @@ export default function TrackComplaint() {
             </div>
 
             {otpSent && (
-              <div className="flex gap-2">
-                <input
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
-                  placeholder="Enter 6-digit OTP"
-                  maxLength={6}
-                  className="flex-1 border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                />
-                <button
-                  onClick={() => verifyMutation.mutate()}
-                  disabled={!otp || verifyMutation.isPending}
-                  className="px-6 py-2 bg-blue-900 text-white rounded-lg hover:bg-blue-800 transition disabled:opacity-50"
-                >
-                  {verifyMutation.isPending ? 'Verifying...' : 'Verify'}
-                </button>
+              <div className="space-y-2">
+                {devOtp && (
+                  <div className="flex items-center gap-3 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 text-sm">
+                    <span className="text-amber-600">⚠️ Email not configured.</span>
+                    <span className="text-amber-800 font-medium">Your OTP:</span>
+                    <span className="font-mono font-bold text-lg text-amber-900 tracking-widest">{devOtp}</span>
+                    <span className="text-amber-600 text-xs">(auto-filled below)</span>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value)}
+                    placeholder="Enter 6-digit OTP"
+                    maxLength={6}
+                    className="flex-1 border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                  />
+                  <button
+                    onClick={() => verifyMutation.mutate()}
+                    disabled={!otp || verifyMutation.isPending}
+                    className="px-6 py-2 bg-blue-900 text-white rounded-lg hover:bg-blue-800 transition disabled:opacity-50"
+                  >
+                    {verifyMutation.isPending ? 'Verifying...' : 'Verify'}
+                  </button>
+                </div>
               </div>
             )}
 

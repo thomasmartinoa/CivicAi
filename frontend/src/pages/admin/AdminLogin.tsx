@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { adminLogin } from '../../services/api';
 
@@ -7,11 +7,13 @@ export default function AdminLogin() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: () => adminLogin(email, password),
     onSuccess: (res) => {
       localStorage.setItem('admin_token', res.data.access_token);
+      queryClient.clear();  // wipe any cached 401 errors
       navigate('/admin');
     },
   });
