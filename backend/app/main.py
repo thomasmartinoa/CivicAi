@@ -1,15 +1,35 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import settings
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.routers import auth, complaints, admin, public
+from app.agents.tracker import check_sla_deadlines
+
+scheduler = AsyncIOScheduler()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.add_job(
+        lambda: check_sla_deadlines(SessionLocal()),
+        "interval",
+        minutes=5,
+    )
+    scheduler.start()
+    yield
+    scheduler.shutdown()
+
 
 app = FastAPI(
     title="CivicAI",
     description="AI-Driven Government Infrastructure Resolution System",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
