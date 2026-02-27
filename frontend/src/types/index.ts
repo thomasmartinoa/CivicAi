@@ -41,7 +41,18 @@ export interface DashboardStats {
   resolution_rate: number;
   by_category: Record<string, number>;
   by_status: Record<string, number>;
-  heatmap_data: Array<{ lat: number; lng: number; category: string; status: string }>;
+  heatmap_data: Array<{ lat: number; lng: number; category: string; status: string; color: string }>;
+  recent_complaints: Array<{
+    id: string;
+    description: string;
+    category: string;
+    status: string;
+    address: string;
+    created_at: string;
+    risk_level: string;
+    media_url: string | null;
+    citizen_name: string | null;
+  }>;
 }
 
 export interface Analytics {
