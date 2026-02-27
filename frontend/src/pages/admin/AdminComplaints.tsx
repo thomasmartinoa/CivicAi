@@ -36,7 +36,7 @@ export default function AdminComplaints() {
     queryKey: ['adminComplaints', params],
     queryFn: async () => {
       const res = await getAdminComplaints(params);
-      return res.data;
+      return res.data.complaints;
     },
   });
 
