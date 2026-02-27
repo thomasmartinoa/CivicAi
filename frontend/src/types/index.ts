@@ -1,0 +1,52 @@
+export interface Complaint {
+  id: string;
+  tracking_id: string;
+  status: string;
+  description: string;
+  citizen_email: string;
+  category: string | null;
+  subcategory: string | null;
+  priority_score: number | null;
+  risk_level: string | null;
+  address: string | null;
+  ward: string | null;
+  district: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkOrder {
+  id: string;
+  complaint_id: string;
+  contractor_id: string | null;
+  status: string;
+  sla_deadline: string | null;
+  estimated_cost: number | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface Contractor {
+  id: string;
+  name: string;
+  specializations: string[];
+  rating: number;
+  active_workload: number;
+  zone: string;
+}
+
+export interface DashboardStats {
+  total_complaints: number;
+  resolved_complaints: number;
+  resolution_rate: number;
+  by_category: Record<string, number>;
+  by_status: Record<string, number>;
+  heatmap_data: Array<{ lat: number; lng: number; category: string; status: string }>;
+}
+
+export interface Analytics {
+  total_complaints: number;
+  by_status: Record<string, number>;
+  by_category: Record<string, number>;
+  by_risk_level: Record<string, number>;
+}
