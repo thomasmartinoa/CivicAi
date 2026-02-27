@@ -15,7 +15,8 @@ export const trackComplaint = (trackingId: string) => api.get(`/complaints/track
 export const requestOTP = (email: string) => api.post('/complaints/verify-email', { email });
 export const verifyOTP = (email: string, otp: string) => api.post('/complaints/verify-otp', { email, otp });
 export const getMyComplaints = (email: string) => api.get(`/complaints/my?email=${email}`);
-export const getPublicDashboard = (tenantId?: string) => api.get('/public/dashboard', { params: { tenant_id: tenantId } });
+export const getPublicDashboard = (tenantId?: string, state?: string, district?: string, category?: string) =>
+  api.get('/public/dashboard', { params: { tenant_id: tenantId, state, district, category } });
 export const adminLogin = (email: string, password: string) => api.post('/admin/login', { email, password });
 export const getAdminComplaints = (params?: Record<string, string>) => api.get('/admin/complaints', { params });
 export const updateComplaint = (id: string, data: Record<string, unknown>) => api.patch(`/admin/complaints/${id}`, data);
