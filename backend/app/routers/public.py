@@ -25,12 +25,16 @@ async def public_dashboard(
 
     if category:
         query = query.filter(Complaint.category == category)
-        
+
     if district:
-        query = query.filter(Complaint.district == district)
-    elif state and state in STATE_DISTRICT_MAP:
-        districts = STATE_DISTRICT_MAP[state]
-        query = query.filter(Complaint.district.in_(districts))
+        # Match district column OR address text
+        query = query.filter(
+            (Complaint.district == district) |
+            (Complaint.address.ilike(f"%{district}%"))
+        )
+    elif state:
+        # Match state name in address text (works even when district column is NULL)
+        query = query.filter(Complaint.address.ilike(f"%{state}%"))
 
     total = query.count()
     resolved = query.filter(Complaint.status.in_(["resolved", "closed"])).count()
@@ -42,25 +46,34 @@ async def public_dashboard(
     )
     
     # Calculate colors based on risk_level/status
+    RISK_COLORS = {
+        "critical": "#ef4444",
+        "high": "#f97316",
+        "medium": "#eab308",
+        "low": "#22c55e",
+    }
     heatmap = []
     for c in query.filter(Complaint.latitude.isnot(None), Complaint.longitude.isnot(None)).limit(500).all():
-        color = "yellow"
         if c.status in ["resolved", "closed"]:
-            color = "green"
-        elif c.risk_level in ["critical", "high"]:
-            color = "red"
-            
+            color = "#22c55e"
+        else:
+            color = RISK_COLORS.get(c.risk_level or "medium", "#eab308")
         heatmap.append({
-            "lat": c.latitude, 
-            "lng": c.longitude, 
-            "category": c.category, 
+            "lat": c.latitude,
+            "lng": c.longitude,
+            "category": c.category,
             "status": c.status,
-            "color": color
+            "risk_level": c.risk_level,
+            "color": color,
         })
 
     recent_complaints = []
     for c in query.order_by(Complaint.created_at.desc()).options(joinedload(Complaint.media)).limit(50).all():
-        media_url = c.media[0].file_path if c.media else None
+        # Convert absolute file path to relative URL (just the filename)
+        media_url = None
+        if c.media:
+            import os as _os
+            media_url = "media/" + _os.path.basename(c.media[0].file_path)
         recent_complaints.append({
             "id": c.id,
             "description": c.description,

@@ -2,14 +2,17 @@ import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { MapContainer, TileLayer, CircleMarker, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
 import { getPublicDashboard } from '../../services/api';
 import type { DashboardStats } from '../../types';
 import {
   PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer
 } from 'recharts';
 import type { PieLabelRenderProps } from 'recharts';
-import { STATE_DISTRICT_MAP } from '../../utils/locations';
+
+import { STATE_DISTRICT_MAP, STATE_COORDS } from '../../utils/locations';
 import L from 'leaflet';
+
 
 // Fix leaflet icons
 const iconRetinaUrl = new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).href;
@@ -39,45 +42,17 @@ const CATEGORIES = ["Roads", "Electricity", "Water", "Sanitation", "Public Space
 function MapUpdater({ markers, state, district }: { markers: any[], state: string, district: string }) {
   const map = useMap();
   useEffect(() => {
-    const place = district ? `${district}, ${state}, India` : (state ? `${state}, India` : '');
-
-    if (place) {
-      // Use Nominatim to get bounding box for the state/district
-      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(place)}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.length > 0) {
-            const bbox = data[0].boundingbox; // [latMin, latMax, lonMin, lonMax]
-            if (bbox) {
-              const bounds = L.latLngBounds(
-                [parseFloat(bbox[0]), parseFloat(bbox[2])],
-                [parseFloat(bbox[1]), parseFloat(bbox[3])]
-              );
-              map.fitBounds(bounds, { padding: [20, 20] });
-            } else {
-              map.setView([parseFloat(data[0].lat), parseFloat(data[0].lon)], district ? 10 : 6);
-            }
-          } else if (markers.length > 0) {
-            const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lng]));
-            map.fitBounds(bounds, { padding: [50, 50], maxZoom: 12 });
-          }
-        })
-        .catch(err => {
-          console.error("Geocoding failed", err);
-          if (markers.length > 0) {
-            const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lng]));
-            map.fitBounds(bounds, { padding: [50, 50], maxZoom: 12 });
-          }
-        });
+    map.invalidateSize();
+    if (state && STATE_COORDS[state]) {
+      const { lat, lng, zoom } = STATE_COORDS[state];
+      map.setView([lat, lng], district ? zoom + 2 : zoom, { animate: true });
+    } else if (markers.length > 0) {
+      const bounds = L.latLngBounds(markers.map((m: any) => [m.lat, m.lng]));
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 12 });
     } else {
-      if (markers.length > 0) {
-        const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lng]));
-        map.fitBounds(bounds, { padding: [50, 50], maxZoom: 12 });
-      } else {
-        map.setView([20.5937, 78.9629], 5); // Default India view
-      }
+      map.setView([20.5937, 78.9629], 5, { animate: true });
     }
-  }, [markers, state, district, map]);
+  }, [state, district]);
   return null;
 }
 
@@ -85,12 +60,12 @@ const RISK_COLOR: Record<string, string> = {
   critical: '#ef4444',
   high: '#f97316',
   medium: '#eab308',
-  low: '#16a34a',
+  low: '#22c55e',
 };
 
-function getRiskColor(status: string) {
-  if (status === 'resolved' || status === 'closed') return '#16a34a';
-  return RISK_COLOR['medium'];
+function getRiskColor(riskLevel: string | null | undefined, status: string) {
+  if (status === 'resolved' || status === 'closed') return '#22c55e';
+  return RISK_COLOR[riskLevel || 'medium'] || '#eab308';
 }
 
 export default function PublicDashboard() {
@@ -109,20 +84,21 @@ export default function PublicDashboard() {
       const res = await getPublicDashboard(undefined, selectedState || undefined, selectedDistrict || undefined, selectedCategory ? selectedCategory.toUpperCase() : undefined);
       return res.data;
     },
+    placeholderData: (prev) => prev,
   });
 
-  if (isLoading) {
+  if (isError) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-900"></div>
+      <div className="text-center py-20">
+        <p className="text-red-600">Failed to load dashboard data.</p>
       </div>
     );
   }
 
-  if (isError || !data) {
+  if (!data) {
     return (
-      <div className="text-center py-20">
-        <p className="text-red-600">Failed to load dashboard data.</p>
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-900"></div>
       </div>
     );
   }
@@ -138,7 +114,7 @@ export default function PublicDashboard() {
       </div>
 
       {/* Filter Bar */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm flex flex-col md:flex-row gap-4">
+      <div className={`bg-white rounded-xl border border-gray-200 p-4 shadow-sm flex flex-col md:flex-row gap-4 transition-opacity ${isLoading ? 'opacity-60 pointer-events-none' : ''}`}>
         <div className="flex-1">
           <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
           <select
@@ -224,12 +200,12 @@ export default function PublicDashboard() {
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-lg font-semibold text-gray-800">Infrastructure Issues Map</h2>
           <div className="flex gap-4 text-xs">
-            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500 inline-block"></span> High Risk</span>
-            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-yellow-400 inline-block"></span> Moderate</span>
-            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-green-500 inline-block"></span> Resolved</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500 inline-block"></span> Critical</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-orange-400 inline-block"></span> High</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-yellow-400 inline-block"></span> Medium</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-green-500 inline-block"></span> Resolved / Low</span>
           </div>
         </div>
-
         <div className="h-[500px] w-full bg-gray-100 rounded-lg overflow-hidden border border-gray-200">
           <MapContainer
             center={[20.5937, 78.9629]}
@@ -247,11 +223,12 @@ export default function PublicDashboard() {
               <Marker
                 key={i}
                 position={[marker.lat, marker.lng]}
-                icon={createCustomIcon(marker.color)}
+                icon={createCustomIcon(getRiskColor(marker.risk_level, marker.status))}
               >
                 <Popup>
                   <div className="text-sm font-semibold mb-1">{marker.category || 'Unknown'}</div>
                   <div className="text-xs text-gray-600 capitalize">Status: {marker.status}</div>
+                  {marker.risk_level && <div className="text-xs text-gray-500 capitalize">Risk: {marker.risk_level}</div>}
                 </Popup>
               </Marker>
             ))}
@@ -308,8 +285,8 @@ export default function PublicDashboard() {
           </h2>
           <div className="rounded-lg overflow-hidden" style={{ height: 400 }}>
             <MapContainer
-              center={[data.heatmap_data[0].lat, data.heatmap_data[0].lng]}
-              zoom={12}
+              center={[20.5937, 78.9629]}
+              zoom={5}
               style={{ height: '100%', width: '100%' }}
               scrollWheelZoom={false}
             >
@@ -323,22 +300,27 @@ export default function PublicDashboard() {
                   center={[point.lat, point.lng]}
                   radius={8}
                   pathOptions={{
-                    color: getRiskColor(point.status),
-                    fillColor: getRiskColor(point.status),
-                    fillOpacity: 0.7,
+                    color: getRiskColor((point as any).risk_level, point.status),
+                    fillColor: getRiskColor((point as any).risk_level, point.status),
+                    fillOpacity: 0.75,
+                    weight: 2,
                   }}
                 >
                   <Popup>
                     <strong>{point.category}</strong><br />
-                    Status: {point.status}
+                    Status: {point.status}<br />
+                    {(point as any).risk_level && <>Risk: {(point as any).risk_level}</>}
                   </Popup>
                 </CircleMarker>
               ))}
+              <MapUpdater markers={data.heatmap_data as any[]} state={selectedState} district={selectedDistrict} />
             </MapContainer>
           </div>
           <div className="flex gap-4 mt-3 text-xs text-gray-500">
-            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-green-500"></span> Resolved</span>
-            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-yellow-400"></span> In Progress</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-red-500"></span> Critical</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-orange-400"></span> High</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-yellow-400"></span> Medium</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-green-500"></span> Resolved / Low</span>
           </div>
         </div>
       )}

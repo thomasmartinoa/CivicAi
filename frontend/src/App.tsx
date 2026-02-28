@@ -8,6 +8,7 @@ import AdminLogin from './pages/admin/AdminLogin';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminComplaints from './pages/admin/AdminComplaints';
 import AdminWorkOrders from './pages/admin/AdminWorkOrders';
+import Pricing from './pages/Pricing';
 
 const queryClient = new QueryClient();
 
@@ -16,6 +17,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
+          <Route path="/pricing" element={<Pricing />} />
           <Route path="/" element={<Layout />}>
             <Route index element={<SubmitComplaint />} />
             <Route path="track" element={<TrackComplaint />} />

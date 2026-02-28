@@ -6,7 +6,7 @@ class GeocodingService:
 
     async def reverse_geocode(self, lat: float, lon: float) -> dict:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=3.0) as client:
                 response = await client.get(
                     self.NOMINATIM_URL,
                     params={"lat": lat, "lon": lon, "format": "json", "addressdetails": 1},
