@@ -4,6 +4,7 @@ export interface Complaint {
   status: string;
   description: string;
   citizen_email: string;
+  citizen_name: string | null;
   category: string | null;
   subcategory: string | null;
   priority_score: number | null;
@@ -11,6 +12,7 @@ export interface Complaint {
   address: string | null;
   ward: string | null;
   district: string | null;
+  state: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -41,7 +43,7 @@ export interface DashboardStats {
   resolution_rate: number;
   by_category: Record<string, number>;
   by_status: Record<string, number>;
-  heatmap_data: Array<{ lat: number; lng: number; category: string; status: string; color: string }>;
+  heatmap_data: Array<{ lat: number; lng: number; category: string; status: string; color: string; risk_level?: string }>;
   recent_complaints: Array<{
     id: string;
     description: string;

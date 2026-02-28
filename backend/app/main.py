@@ -1,7 +1,9 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -56,6 +58,11 @@ app.include_router(auth.router)
 app.include_router(complaints.router)
 app.include_router(admin.router)
 app.include_router(public.router)
+
+# Serve uploaded media files
+upload_dir = settings.upload_dir
+os.makedirs(upload_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
 
 
 @app.get("/health")

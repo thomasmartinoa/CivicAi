@@ -7,7 +7,7 @@ import PublicDashboard from './pages/public/PublicDashboard';
 import AdminLogin from './pages/admin/AdminLogin';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminComplaints from './pages/admin/AdminComplaints';
-import AdminWorkOrders from './pages/admin/AdminWorkOrders';
+import AdminComplaintDetail from './pages/admin/AdminComplaintDetail';
 
 const queryClient = new QueryClient();
 
@@ -23,7 +23,7 @@ export default function App() {
             <Route path="admin/login" element={<AdminLogin />} />
             <Route path="admin" element={<AdminDashboard />} />
             <Route path="admin/complaints" element={<AdminComplaints />} />
-            <Route path="admin/work-orders" element={<AdminWorkOrders />} />
+            <Route path="admin/complaints/:id" element={<AdminComplaintDetail />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -111,6 +111,7 @@ async def submit_complaint(
         complaint.ward = result.data.get("ward") or complaint.ward
         complaint.block = result.data.get("block") or complaint.block
         complaint.district = result.data.get("district") or complaint.district
+        complaint.state = result.data.get("state") or complaint.state
         complaint.address = result.data.get("address") or complaint.address
 
         if result.work_order and not result.errors:
@@ -136,12 +137,38 @@ async def submit_complaint(
     return complaint
 
 
-@router.get("/track/{tracking_id}", response_model=ComplaintTrackResponse)
+@router.get("/track/{tracking_id}")
 async def track_complaint(tracking_id: str, db: Session = Depends(get_db)):
-    complaint = db.query(Complaint).filter(Complaint.tracking_id == tracking_id).first()
+    from sqlalchemy.orm import joinedload
+    complaint = db.query(Complaint).options(joinedload(Complaint.media), joinedload(Complaint.work_order)).filter(Complaint.tracking_id == tracking_id).first()
     if not complaint:
         raise HTTPException(status_code=404, detail="Complaint not found")
-    return complaint
+    media_list = [
+        {"file_path": m.file_path, "media_type": m.media_type, "original_filename": m.original_filename}
+        for m in (complaint.media or [])
+    ]
+    wo = complaint.work_order
+    work_order_data = None
+    if wo:
+        work_order_data = {
+            "id": wo.id, "status": wo.status,
+            "sla_deadline": wo.sla_deadline.isoformat() if wo.sla_deadline else None,
+            "estimated_cost": wo.estimated_cost, "materials": wo.materials, "notes": wo.notes,
+        }
+    return {
+        "id": complaint.id, "tracking_id": complaint.tracking_id, "status": complaint.status,
+        "description": complaint.description, "citizen_email": complaint.citizen_email,
+        "citizen_name": complaint.citizen_name, "citizen_phone": complaint.citizen_phone,
+        "category": complaint.category, "subcategory": complaint.subcategory,
+        "priority_score": complaint.priority_score, "risk_level": complaint.risk_level,
+        "address": complaint.address, "ward": complaint.ward, "district": complaint.district,
+        "latitude": complaint.latitude, "longitude": complaint.longitude,
+        "ai_analysis": complaint.ai_analysis,
+        "created_at": complaint.created_at.isoformat() if complaint.created_at else None,
+        "updated_at": complaint.updated_at.isoformat() if complaint.updated_at else None,
+        "media": media_list,
+        "work_order": work_order_data,
+    }
 
 
 @router.post("/verify-email")

@@ -53,6 +53,7 @@ class IntakeAgent(BaseAgent):
         context.data["ward"] = location_data.get("ward", "")
         context.data["block"] = location_data.get("block", "")
         context.data["district"] = location_data.get("district", "")
+        context.data["state"] = location_data.get("state", "")
         context.data["media_files"] = raw.get("media_files", [])
         context.data["media_texts"] = media_texts
         context.data["intake_complete"] = True

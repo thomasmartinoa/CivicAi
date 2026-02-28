@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { MapContainer, TileLayer, CircleMarker, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { getPublicDashboard } from '../../services/api';
 import type { DashboardStats } from '../../types';
@@ -79,18 +79,6 @@ function MapUpdater({ markers, state, district }: { markers: any[], state: strin
     }
   }, [markers, state, district, map]);
   return null;
-}
-
-const RISK_COLOR: Record<string, string> = {
-  critical: '#ef4444',
-  high: '#f97316',
-  medium: '#eab308',
-  low: '#16a34a',
-};
-
-function getRiskColor(status: string) {
-  if (status === 'resolved' || status === 'closed') return '#16a34a';
-  return RISK_COLOR['medium'];
 }
 
 export default function PublicDashboard() {
@@ -252,6 +240,7 @@ export default function PublicDashboard() {
                 <Popup>
                   <div className="text-sm font-semibold mb-1">{marker.category || 'Unknown'}</div>
                   <div className="text-xs text-gray-600 capitalize">Status: {marker.status}</div>
+                  {marker.risk_level && <div className="text-xs text-gray-600 capitalize">Risk: {marker.risk_level}</div>}
                 </Popup>
               </Marker>
             ))}
@@ -299,47 +288,10 @@ export default function PublicDashboard() {
         )}
       </div>
 
-      {/* Complaint Heatmap */}
+      {/* Geotagged count */}
       {data.heatmap_data && data.heatmap_data.length > 0 && (
-        <div className="mt-6 bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">
-            Complaint Map
-            <span className="ml-2 text-sm font-normal text-gray-400">({data.heatmap_data.length} geotagged complaints)</span>
-          </h2>
-          <div className="rounded-lg overflow-hidden" style={{ height: 400 }}>
-            <MapContainer
-              center={[data.heatmap_data[0].lat, data.heatmap_data[0].lng]}
-              zoom={12}
-              style={{ height: '100%', width: '100%' }}
-              scrollWheelZoom={false}
-            >
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              />
-              {data.heatmap_data.map((point, i) => (
-                <CircleMarker
-                  key={i}
-                  center={[point.lat, point.lng]}
-                  radius={8}
-                  pathOptions={{
-                    color: getRiskColor(point.status),
-                    fillColor: getRiskColor(point.status),
-                    fillOpacity: 0.7,
-                  }}
-                >
-                  <Popup>
-                    <strong>{point.category}</strong><br />
-                    Status: {point.status}
-                  </Popup>
-                </CircleMarker>
-              ))}
-            </MapContainer>
-          </div>
-          <div className="flex gap-4 mt-3 text-xs text-gray-500">
-            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-green-500"></span> Resolved</span>
-            <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-yellow-400"></span> In Progress</span>
-          </div>
+        <div className="text-center text-sm text-gray-400">
+          Showing {data.heatmap_data.length} geotagged complaint{data.heatmap_data.length !== 1 ? 's' : ''} on map
         </div>
       )}
     </div>

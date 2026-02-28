@@ -24,8 +24,10 @@ class MediaService:
             await f.write(content)
 
         media_type = self._detect_media_type(ext)
+        # Use forward slashes for URL compatibility
+        relative_path = f"uploads/{filename}"
         return {
-            "file_path": str(file_path),
+            "file_path": relative_path,
             "media_type": media_type,
             "original_filename": file.filename,
         }

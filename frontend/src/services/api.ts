@@ -41,6 +41,8 @@ export const getPublicDashboard = (tenantId?: string, state?: string, district?:
 export const adminLogin = (email: string, password: string) => api.post('/admin/login', { email, password });
 export const getAdminComplaints = (params?: Record<string, string>) => api.get('/admin/complaints', { params });
 export const updateComplaint = (id: string, data: Record<string, unknown>) => api.patch(`/admin/complaints/${id}`, data);
+export const getAdminComplaintDetail = (id: string) => api.get(`/admin/complaints/${id}`);
+export const approveComplaintEmail = (id: string, emailDraft: string) => api.post(`/admin/complaints/${id}/approve-email`, { email_draft: emailDraft });
 export const getWorkOrders = (status?: string) => api.get('/admin/work-orders', { params: { status } });
 export const updateWorkOrder = (id: string, data: Record<string, unknown>) => api.patch(`/admin/work-orders/${id}`, data);
 export const getAnalytics = () => api.get('/admin/analytics');

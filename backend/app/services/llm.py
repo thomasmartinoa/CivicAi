@@ -209,6 +209,121 @@ Respond in JSON: {{"priority_score": int, "risk_level": str, "category_severity"
         except Exception:
             return _keyword_risk(category)
 
+    async def generate_email_draft(self, complaint_data: dict) -> str:
+        """Generate a formal email draft to the concerned department about a complaint."""
+        tracking_id = complaint_data.get("tracking_id", "N/A")
+        category = complaint_data.get("category", "General")
+        department = complaint_data.get("department_name", "Concerned Department")
+        description = complaint_data.get("description", "")
+        risk_level = complaint_data.get("risk_level", "medium")
+        priority_score = complaint_data.get("priority_score", "N/A")
+        address = complaint_data.get("address", "Not specified")
+        ward = complaint_data.get("ward", "")
+        district = complaint_data.get("district", "")
+        state = complaint_data.get("state", "")
+        citizen_name = complaint_data.get("citizen_name", "A citizen")
+        sla_deadline = complaint_data.get("sla_deadline", "")
+
+        location_parts = [p for p in [address, ward, district, state] if p]
+        location_str = ", ".join(location_parts) if location_parts else "Not specified"
+
+        if _has_api_key(self.provider):
+            prompt = f"""Draft a formal government email to the {department} regarding an infrastructure complaint.
+
+Complaint Details:
+- Tracking ID: {tracking_id}
+- Category: {category}
+- Risk Level: {risk_level} (Priority Score: {priority_score}/100)
+- Description: {description}
+- Location: {location_str}
+- Reported by: {citizen_name}
+- SLA Deadline: {sla_deadline or 'Not set'}
+
+Write a professional, concise email that:
+1. Has a clear subject line
+2. States the issue and its urgency
+3. Provides the location and details
+4. Requests immediate action based on risk level
+5. Mentions the SLA deadline if available
+
+Return ONLY the email text, no JSON wrapping. Include Subject:, To:, and Body sections."""
+
+            try:
+                if self.provider == "gemini":
+                    import asyncio
+                    from google import genai
+                    client = genai.Client(api_key=settings.gemini_api_key)
+                    response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model="gemini-2.5-flash-lite",
+                        contents=prompt,
+                    )
+                    return response.text or self._fallback_email(complaint_data)
+                elif self.provider == "anthropic":
+                    import anthropic
+                    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+                    response = await client.messages.create(
+                        model="claude-sonnet-4-20250514", max_tokens=1024,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    return response.content[0].text
+                else:
+                    from openai import AsyncOpenAI
+                    client = AsyncOpenAI(api_key=settings.openai_api_key)
+                    response = await client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    return response.choices[0].message.content or self._fallback_email(complaint_data)
+            except Exception:
+                return self._fallback_email(complaint_data)
+        else:
+            return self._fallback_email(complaint_data)
+
+    def _fallback_email(self, data: dict) -> str:
+        tracking_id = data.get("tracking_id", "N/A")
+        category = data.get("category", "General")
+        department = data.get("department_name", "Concerned Department")
+        description = data.get("description", "")
+        risk_level = data.get("risk_level", "medium")
+        address = data.get("address", "Not specified")
+        district = data.get("district", "")
+        state = data.get("state", "")
+        citizen_name = data.get("citizen_name", "A citizen")
+        sla_deadline = data.get("sla_deadline", "")
+
+        location_parts = [p for p in [address, district, state] if p]
+        location_str = ", ".join(location_parts) if location_parts else "Not specified"
+
+        urgency = "URGENT: " if risk_level in ("critical", "high") else ""
+
+        return f"""Subject: {urgency}Infrastructure Complaint [{tracking_id}] - {category}
+
+To: {department}
+
+Dear Sir/Madam,
+
+This is to bring to your attention an infrastructure complaint that has been registered on the CivicAI platform and requires your department's immediate attention.
+
+Complaint Reference: {tracking_id}
+Category: {category}
+Risk Level: {risk_level.upper()}
+{f"SLA Deadline: {sla_deadline}" if sla_deadline else ""}
+
+Issue Description:
+{description}
+
+Location: {location_str}
+
+Reported By: {citizen_name}
+
+We request your department to kindly look into this matter and take necessary action at the earliest. {f"Given the {risk_level} risk level, this matter requires priority attention." if risk_level in ("critical", "high") else ""}
+
+Please update the status of this complaint on the CivicAI platform once action has been initiated.
+
+Regards,
+CivicAI - Infrastructure Resolution System"""
+
     def build_classification_prompt(self, description: str, media_text: str = "") -> str:
         categories_str = ", ".join(INFRASTRUCTURE_CATEGORIES)
         return f"""Classify this infrastructure complaint into one of these categories: {categories_str}

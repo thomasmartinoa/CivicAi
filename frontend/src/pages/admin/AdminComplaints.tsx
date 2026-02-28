@@ -26,7 +26,6 @@ export default function AdminComplaints() {
   const [statusFilter, setStatusFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [riskFilter, setRiskFilter] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!localStorage.getItem('admin_token')) navigate('/admin/login');
@@ -133,44 +132,22 @@ export default function AdminComplaints() {
                 </tr>
               ) : (
                 (data || []).map((c) => (
-                  <>
-                    <tr
-                      key={c.id}
-                      onClick={() => setExpandedId(expandedId === c.id ? null : c.id)}
-                      className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition"
-                    >
-                      <td className="px-4 py-3 font-mono text-xs">{c.tracking_id}</td>
-                      <td className="px-4 py-3 max-w-xs truncate">{c.description}</td>
-                      <td className="px-4 py-3">{c.category || '-'}</td>
-                      <td className={`px-4 py-3 ${riskColor[c.risk_level || ''] || ''}`}>{c.risk_level || '-'}</td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor[c.status] || 'bg-gray-100'}`}>
-                          {c.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-gray-500">{new Date(c.created_at).toLocaleDateString()}</td>
-                    </tr>
-                    {expandedId === c.id && (
-                      <tr key={`${c.id}-detail`} className="bg-blue-50">
-                        <td colSpan={6} className="px-6 py-4">
-                          <div className="grid grid-cols-2 gap-4 text-sm">
-                            <div>
-                              <p className="text-gray-500">Full Description</p>
-                              <p className="text-gray-800">{c.description}</p>
-                            </div>
-                            <div className="space-y-2">
-                              <p><span className="text-gray-500">Email:</span> {c.citizen_email}</p>
-                              <p><span className="text-gray-500">Subcategory:</span> {c.subcategory || '-'}</p>
-                              <p><span className="text-gray-500">Priority Score:</span> {c.priority_score ?? '-'}</p>
-                              <p><span className="text-gray-500">Address:</span> {c.address || '-'}</p>
-                              <p><span className="text-gray-500">Ward:</span> {c.ward || '-'} | <span className="text-gray-500">District:</span> {c.district || '-'}</p>
-                              <p><span className="text-gray-500">Updated:</span> {new Date(c.updated_at).toLocaleString()}</p>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </>
+                  <tr
+                    key={c.id}
+                    onClick={() => navigate(`/admin/complaints/${c.id}`)}
+                    className="border-b border-gray-100 hover:bg-blue-50 cursor-pointer transition"
+                  >
+                    <td className="px-4 py-3 font-mono text-xs">{c.tracking_id}</td>
+                    <td className="px-4 py-3 max-w-xs truncate">{c.description}</td>
+                    <td className="px-4 py-3">{c.category || '-'}</td>
+                    <td className={`px-4 py-3 ${riskColor[c.risk_level || ''] || ''}`}>{c.risk_level || '-'}</td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor[c.status] || 'bg-gray-100'}`}>
+                        {c.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-500">{new Date(c.created_at).toLocaleDateString()}</td>
+                  </tr>
                 ))
               )}
             </tbody>

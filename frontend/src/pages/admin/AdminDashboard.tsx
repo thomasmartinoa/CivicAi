@@ -77,9 +77,6 @@ export default function AdminDashboard() {
           <Link to="/admin/complaints" className="px-4 py-2 bg-blue-900 text-white rounded-lg hover:bg-blue-800 transition text-sm">
             View All Complaints
           </Link>
-          <Link to="/admin/work-orders" className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm">
-            View Work Orders
-          </Link>
           <button onClick={handleLogout} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition text-sm">
             Logout
           </button>

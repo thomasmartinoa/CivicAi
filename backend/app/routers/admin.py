@@ -46,13 +46,129 @@ async def list_complaints(
                 "description": c.description, "category": c.category,
                 "subcategory": c.subcategory, "priority_score": c.priority_score,
                 "risk_level": c.risk_level, "address": c.address,
-                "citizen_email": c.citizen_email,
+                "ward": c.ward, "district": c.district,
+                "citizen_email": c.citizen_email, "citizen_name": c.citizen_name,
                 "created_at": c.created_at.isoformat() if c.created_at else None,
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
             }
             for c in complaints
         ],
         "total": total,
     }
+
+
+@router.get("/complaints/{complaint_id}")
+async def get_complaint_detail(
+    complaint_id: str,
+    user: User = Depends(require_officer_or_admin),
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy.orm import joinedload
+    from app.agents.router import CATEGORY_DEPARTMENT_MAP
+    from app.services.llm import llm_service
+
+    complaint = db.query(Complaint).options(
+        joinedload(Complaint.media),
+        joinedload(Complaint.work_order),
+    ).filter(Complaint.id == complaint_id).first()
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    # Build media list
+    media_list = [
+        {
+            "id": str(m.id),
+            "file_path": m.file_path,
+            "media_type": m.media_type,
+            "original_filename": m.original_filename,
+        }
+        for m in (complaint.media or [])
+    ]
+
+    # Work order info
+    wo = complaint.work_order
+    work_order_data = None
+    if wo:
+        work_order_data = {
+            "id": str(wo.id),
+            "status": wo.status,
+            "sla_deadline": wo.sla_deadline.isoformat() if wo.sla_deadline else None,
+            "estimated_cost": wo.estimated_cost,
+            "notes": wo.notes,
+            "contractor_id": str(wo.contractor_id) if wo.contractor_id else None,
+            "created_at": wo.created_at.isoformat() if wo.created_at else None,
+            "completed_at": wo.completed_at.isoformat() if getattr(wo, 'completed_at', None) else None,
+        }
+
+    # Department name from category
+    department_name = CATEGORY_DEPARTMENT_MAP.get(complaint.category or "", "General Administration")
+
+    # Generate email draft if not already saved
+    email_draft = complaint.email_draft
+    if not email_draft:
+        email_data = {
+            "tracking_id": complaint.tracking_id,
+            "category": complaint.category,
+            "department_name": department_name,
+            "description": complaint.description,
+            "risk_level": complaint.risk_level,
+            "priority_score": complaint.priority_score,
+            "address": complaint.address,
+            "ward": complaint.ward,
+            "district": complaint.district,
+            "state": complaint.state,
+            "citizen_name": complaint.citizen_name or "A citizen",
+            "sla_deadline": wo.sla_deadline.isoformat() if wo and wo.sla_deadline else "",
+        }
+        try:
+            email_draft = await llm_service.generate_email_draft(email_data)
+        except Exception:
+            email_draft = llm_service._fallback_email(email_data)
+
+    return {
+        "id": str(complaint.id),
+        "tracking_id": complaint.tracking_id,
+        "status": complaint.status,
+        "description": complaint.description,
+        "citizen_email": complaint.citizen_email,
+        "citizen_name": complaint.citizen_name,
+        "citizen_phone": complaint.citizen_phone,
+        "category": complaint.category,
+        "subcategory": complaint.subcategory,
+        "priority_score": complaint.priority_score,
+        "risk_level": complaint.risk_level,
+        "address": complaint.address,
+        "ward": complaint.ward,
+        "district": complaint.district,
+        "state": complaint.state,
+        "latitude": complaint.latitude,
+        "longitude": complaint.longitude,
+        "ai_analysis": complaint.ai_analysis,
+        "created_at": complaint.created_at.isoformat() if complaint.created_at else None,
+        "updated_at": complaint.updated_at.isoformat() if complaint.updated_at else None,
+        "media": media_list,
+        "work_order": work_order_data,
+        "department_name": department_name,
+        "email_draft": email_draft,
+        "email_approved": complaint.email_approved,
+    }
+
+
+@router.post("/complaints/{complaint_id}/approve-email")
+async def approve_complaint_email(
+    complaint_id: str,
+    body: dict,
+    user: User = Depends(require_officer_or_admin),
+    db: Session = Depends(get_db),
+):
+    complaint = db.query(Complaint).filter(Complaint.id == complaint_id).first()
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    complaint.email_draft = body.get("email_draft", complaint.email_draft or "")
+    complaint.email_approved = True
+    db.commit()
+    return {"message": "Email approved successfully", "email_approved": True}
 
 
 @router.patch("/complaints/{complaint_id}")
@@ -155,9 +271,9 @@ async def get_analytics(user: User = Depends(require_officer_or_admin), db: Sess
     if user.tenant_id:
         query = query.filter(Complaint.tenant_id == user.tenant_id)
     total = query.count()
-    by_status = dict(db.query(Complaint.status, func.count(Complaint.id)).group_by(Complaint.status).all())
-    by_category = dict(db.query(Complaint.category, func.count(Complaint.id)).filter(Complaint.category.isnot(None)).group_by(Complaint.category).all())
-    by_risk = dict(db.query(Complaint.risk_level, func.count(Complaint.id)).filter(Complaint.risk_level.isnot(None)).group_by(Complaint.risk_level).all())
+    by_status = dict(query.with_entities(Complaint.status, func.count(Complaint.id)).group_by(Complaint.status).all())
+    by_category = dict(query.with_entities(Complaint.category, func.count(Complaint.id)).filter(Complaint.category.isnot(None)).group_by(Complaint.category).all())
+    by_risk = dict(query.with_entities(Complaint.risk_level, func.count(Complaint.id)).filter(Complaint.risk_level.isnot(None)).group_by(Complaint.risk_level).all())
     return {"total_complaints": total, "by_status": by_status, "by_category": by_category, "by_risk_level": by_risk}
 
 
