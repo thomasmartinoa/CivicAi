@@ -62,12 +62,26 @@ export default function SubmitComplaint() {
     if (!navigator.geolocation) return;
     setGpsLoading(true);
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLat(pos.coords.latitude.toString());
-        setLng(pos.coords.longitude.toString());
+      async (pos) => {
+        const precLat = parseFloat(pos.coords.latitude.toFixed(6));
+        const precLng = parseFloat(pos.coords.longitude.toFixed(6));
+        setLat(precLat.toString());
+        setLng(precLng.toString());
+        // Reverse geocode to fill address field
+        try {
+          const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${precLat}&lon=${precLng}&format=json&addressdetails=1`,
+            { headers: { 'User-Agent': 'CivicAI/1.0' } }
+          );
+          const data = await res.json();
+          if (data?.display_name) setAddress(data.display_name);
+        } catch {
+          // geocoding failed, lat/lng still captured
+        }
         setGpsLoading(false);
       },
-      () => setGpsLoading(false)
+      () => setGpsLoading(false),
+      { enableHighAccuracy: true, timeout: 10000 }
     );
   };
 
@@ -183,7 +197,7 @@ export default function SubmitComplaint() {
             </button>
           </div>
           {lat && lng && (
-            <p className="text-xs text-gray-500 mt-1">Coordinates: {lat}, {lng}</p>
+            <p className="text-xs text-green-600 mt-1 font-medium">📍 GPS captured: {lat}, {lng}{address ? ' — address filled above' : ''}</p>
           )}
         </div>
 

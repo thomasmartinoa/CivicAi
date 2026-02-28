@@ -26,6 +26,7 @@ class WorkOrder(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completion_photo: Mapped[str | None] = mapped_column(String(500), nullable=True)  # path to proof photo
 
     complaint = relationship("Complaint", back_populates="work_order")
     contractor = relationship("Contractor")

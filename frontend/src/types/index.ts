@@ -1,3 +1,9 @@
+export interface ComplaintMedia {
+  file_path: string;
+  media_type: string;
+  original_filename: string | null;
+}
+
 export interface Complaint {
   id: string;
   tracking_id: string;
@@ -11,8 +17,14 @@ export interface Complaint {
   address: string | null;
   ward: string | null;
   district: string | null;
+  latitude: number | null;
+  longitude: number | null;
   created_at: string;
   updated_at: string;
+  media: ComplaintMedia[];
+  satisfaction_rating: number | null;
+  verified_fixed: boolean | null;
+  reopen_count: number;
 }
 
 export interface WorkOrder {
@@ -24,6 +36,7 @@ export interface WorkOrder {
   estimated_cost: number | null;
   notes: string | null;
   created_at: string;
+  completion_photo: string | null;
 }
 
 export interface Contractor {
@@ -41,7 +54,7 @@ export interface DashboardStats {
   resolution_rate: number;
   by_category: Record<string, number>;
   by_status: Record<string, number>;
-  heatmap_data: Array<{ lat: number; lng: number; category: string; status: string; color: string }>;
+  heatmap_data: Array<{ lat: number; lng: number; category: string; status: string; risk_level: string | null; color: string }>;
   recent_complaints: Array<{
     id: string;
     description: string;
