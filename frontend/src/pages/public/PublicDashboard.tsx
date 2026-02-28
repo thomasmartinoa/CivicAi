@@ -9,7 +9,10 @@ import {
   PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer
 } from 'recharts';
 import type { PieLabelRenderProps } from 'recharts';
+
 import { STATE_DISTRICT_MAP, STATE_COORDS } from '../../utils/locations';
+import L from 'leaflet';
+
 
 // Fix leaflet icons
 const iconRetinaUrl = new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).href;
@@ -186,7 +189,7 @@ export default function PublicDashboard() {
           <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm flex-1 flex flex-col justify-center">
             <p className="text-sm text-gray-500 mb-1">Resolution Rate</p>
             <p className="text-4xl font-bold text-purple-600">
-              {((data?.resolution_rate || 0) * 100).toFixed(1)}%
+              {(data?.resolution_rate || 0).toFixed(1)}%
             </p>
           </div>
         </div>
