@@ -8,6 +8,7 @@ import AdminLogin from './pages/admin/AdminLogin';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminComplaints from './pages/admin/AdminComplaints';
 import AdminComplaintDetail from './pages/admin/AdminComplaintDetail';
+import AdminWorkOrders from './pages/admin/AdminWorkOrders';
 
 const queryClient = new QueryClient();
 
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="admin" element={<AdminDashboard />} />
             <Route path="admin/complaints" element={<AdminComplaints />} />
             <Route path="admin/complaints/:id" element={<AdminComplaintDetail />} />
+            <Route path="admin/work-orders" element={<AdminWorkOrders />} />
           </Route>
         </Routes>
       </BrowserRouter>

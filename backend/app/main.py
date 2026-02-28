@@ -84,9 +84,8 @@ app.include_router(admin.router)
 app.include_router(public.router)
 
 # Serve uploaded media files
-upload_dir = settings.upload_dir
-os.makedirs(upload_dir, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
+os.makedirs(str(UPLOADS_DIR), exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 
 @app.get("/health")
@@ -104,10 +103,6 @@ async def serve_media(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     mime, _ = mimetypes.guess_type(str(file_path))
     return FileResponse(str(file_path), media_type=mime or "application/octet-stream")
-
-
-# Serve uploaded media files via StaticFiles (backup)
-app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 
 @app.post("/admin/seed")
