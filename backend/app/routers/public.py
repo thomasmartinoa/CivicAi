@@ -28,8 +28,7 @@ async def public_dashboard(
     if state:
         query = query.filter(Complaint.state == state)
 
-    # Filter by district using stored district (partial match since Nominatim
-    # returns "Bengaluru Central City Corporation" while user selects "Bengaluru (Bangalore) Urban")
+    # Filter by district (fuzzy match since Nominatim names differ from official names)
     if district:
         query = query.filter(
             Complaint.district.ilike(f"%{district}%") |
@@ -50,28 +49,32 @@ async def public_dashboard(
     )
 
     # Calculate colors based on risk_level/status
+    RISK_COLORS = {
+        "critical": "#ef4444",
+        "high": "#f97316",
+        "medium": "#eab308",
+        "low": "#22c55e",
+    }
     heatmap = []
     for c in query.filter(Complaint.latitude.isnot(None), Complaint.longitude.isnot(None)).limit(500).all():
-        color = "yellow"
         if c.status in ["resolved", "closed"]:
-            color = "green"
-        elif c.risk_level in ["critical", "high"]:
-            color = "red"
-
+            color = "#22c55e"
+        else:
+            color = RISK_COLORS.get(c.risk_level or "medium", "#eab308")
         heatmap.append({
             "lat": c.latitude,
             "lng": c.longitude,
             "category": c.category,
             "status": c.status,
-            "color": color,
             "risk_level": c.risk_level,
+            "color": color,
         })
 
     recent_complaints = []
     for c in query.order_by(Complaint.created_at.desc()).options(joinedload(Complaint.media)).limit(50).all():
         media_url = None
         if c.media:
-            # Find first image media
+            # Find first image media, prefer image type
             for m in c.media:
                 if m.media_type == 'image':
                     media_url = m.file_path

@@ -1,7 +1,7 @@
 from typing import Optional
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -211,6 +211,7 @@ async def list_work_orders(
                 "sla_deadline": wo.sla_deadline.isoformat() if wo.sla_deadline else None,
                 "estimated_cost": wo.estimated_cost, "notes": wo.notes,
                 "created_at": wo.created_at.isoformat() if wo.created_at else None,
+                "completion_photo": f"media/{wo.completion_photo}" if wo.completion_photo else None,
             }
             for wo in orders
         ]
@@ -232,8 +233,26 @@ async def update_work_order(
     if data.status:
         wo.status = data.status
         if data.status == "completed":
+            if not wo.completion_photo:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Upload a completion photo before marking work as completed"
+                )
             from datetime import datetime, timezone
             wo.completed_at = datetime.now(timezone.utc)
+            # Sync complaint → resolved
+            complaint = db.query(Complaint).filter(Complaint.id == wo.complaint_id).first()
+            if complaint:
+                complaint.status = "resolved"
+        elif data.status == "in_progress":
+            # Sync complaint → in_progress
+            complaint = db.query(Complaint).filter(Complaint.id == wo.complaint_id).first()
+            if complaint and complaint.status not in ("resolved", "closed"):
+                complaint.status = "in_progress"
+        elif data.status == "assigned":
+            complaint = db.query(Complaint).filter(Complaint.id == wo.complaint_id).first()
+            if complaint and complaint.status not in ("resolved", "closed", "in_progress"):
+                complaint.status = "assigned"
         # Sync contractor active_workload
         active_statuses = {"created", "assigned", "in_progress"}
         was_active = prev_status in active_statuses
@@ -263,6 +282,31 @@ async def update_work_order(
         wo.officer_id = user.id
     db.commit()
     return {"message": "Work order updated"}
+
+
+@router.post("/work-orders/{work_order_id}/completion-photo")
+async def upload_completion_photo(
+    work_order_id: str,
+    photo: UploadFile = File(...),
+    user: User = Depends(require_officer_or_admin),
+    db: Session = Depends(get_db),
+):
+    """Upload a before/after completion proof photo for a work order."""
+    wo = db.query(WorkOrder).filter(WorkOrder.id == work_order_id).first()
+    if not wo:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    from app.services.media import media_service
+    import shutil, os
+    from pathlib import Path
+    ext = os.path.splitext(photo.filename or "photo.jpg")[1] or ".jpg"
+    import uuid
+    filename = f"completion_{uuid.uuid4().hex}{ext}"
+    save_path = media_service.upload_dir / filename
+    with open(save_path, "wb") as f:
+        shutil.copyfileobj(photo.file, f)
+    wo.completion_photo = filename
+    db.commit()
+    return {"message": "Completion photo uploaded", "filename": filename, "url": f"media/{filename}"}
 
 
 @router.get("/analytics")
@@ -380,3 +424,49 @@ async def list_contractors(user: User = Depends(require_officer_or_admin), db: S
             for c in contractors
         ]
     }
+
+
+@router.get("/briefing")
+async def get_latest_briefing(user: User = Depends(require_officer_or_admin), db: Session = Depends(get_db)):
+    """Return the most recent daily officer briefing."""
+    from app.models.daily_briefing import DailyBriefing
+    briefing = db.query(DailyBriefing).order_by(DailyBriefing.created_at.desc()).first()
+    if not briefing:
+        return {"briefing": None, "message": "No briefing generated yet. Trigger one via POST /admin/briefing/generate"}
+    return {
+        "briefing": {
+            "id": briefing.id,
+            "brief_date": briefing.brief_date.isoformat(),
+            "new_complaints": briefing.new_complaints,
+            "resolved_today": briefing.resolved_today,
+            "sla_at_risk": briefing.sla_at_risk,
+            "escalations_today": briefing.escalations_today,
+            "narrative": briefing.narrative,
+            "created_at": briefing.created_at.isoformat(),
+        }
+    }
+
+
+@router.post("/briefing/generate")
+async def trigger_briefing(user: User = Depends(require_officer_or_admin), db: Session = Depends(get_db)):
+    """Manually trigger a daily briefing generation (for demo/testing)."""
+    from app.agents.briefing import generate_daily_briefing
+    briefing = await generate_daily_briefing(db)
+    return {
+        "message": "Briefing generated",
+        "narrative": briefing.narrative,
+        "stats": {
+            "new_complaints": briefing.new_complaints,
+            "resolved_today": briefing.resolved_today,
+            "sla_at_risk": briefing.sla_at_risk,
+            "escalations_today": briefing.escalations_today,
+        }
+    }
+
+
+@router.post("/cluster/detect")
+async def trigger_cluster_detection(user: User = Depends(require_officer_or_admin), db: Session = Depends(get_db)):
+    """Manually trigger cluster detection (for demo/testing)."""
+    from app.agents.cluster import run_cluster_detection
+    clusters_created = await run_cluster_detection(db)
+    return {"message": f"Cluster detection complete. Clusters created: {clusters_created}"}

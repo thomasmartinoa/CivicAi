@@ -8,10 +8,17 @@ from fastapi import UploadFile
 
 from app.config import settings
 
+# Always store relative to this file's location (backend/uploads/) regardless of CWD
+_BASE_DIR = Path(__file__).resolve().parent.parent.parent  # → backend/
+_DEFAULT_UPLOAD = _BASE_DIR / "uploads"
+
 
 class MediaService:
     def __init__(self):
         self.upload_dir = Path(settings.upload_dir)
+        # If the configured path is relative, anchor it to the backend dir
+        if not self.upload_dir.is_absolute():
+            self.upload_dir = _BASE_DIR / self.upload_dir
         self.upload_dir.mkdir(parents=True, exist_ok=True)
 
     async def save_file(self, file: UploadFile, complaint_id: str) -> dict:

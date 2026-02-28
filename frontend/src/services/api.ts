@@ -7,7 +7,8 @@ api.interceptors.request.use((config) => {
   const token = localStorage.getItem('admin_token');
   if (token) {
     const url = config.url ?? '';
-    if (url.startsWith('/admin') || url.includes('/admin/')) {
+    const isLoginRoute = url.includes('/admin/login');
+    if (!isLoginRoute && (url.startsWith('/admin') || url.includes('/admin/'))) {
       config.headers.Authorization = `Bearer ${token}`;
     }
   }
@@ -49,4 +50,16 @@ export const getAnalytics = () => api.get('/admin/analytics');
 export const getPerformanceMetrics = () => api.get('/admin/analytics/performance');
 export const getContractors = () => api.get('/admin/contractors');
 export const seedDatabase = () => api.post('/admin/seed');
+export const rateComplaint = (trackingId: string, rating: number, comment?: string) =>
+  api.post(`/complaints/${trackingId}/rate`, null, { params: { rating, comment: comment || '' } });
+export const verifyComplaintFixed = (trackingId: string, isFixed: boolean) =>
+  api.post(`/complaints/${trackingId}/verify`, null, { params: { is_fixed: isFixed } });
+export const uploadCompletionPhoto = (workOrderId: string, file: File) => {
+  const fd = new FormData();
+  fd.append('photo', file);
+  return api.post(`/admin/work-orders/${workOrderId}/completion-photo`, fd, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+export const getLatestBriefing = () => api.get('/admin/briefing');
 export default api;

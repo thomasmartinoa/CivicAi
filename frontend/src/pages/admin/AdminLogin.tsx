@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { adminLogin } from '../../services/api';
@@ -8,6 +8,11 @@ export default function AdminLogin() {
   const [password, setPassword] = useState('');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  // Always wipe any stale token when the login page loads
+  useEffect(() => {
+    localStorage.removeItem('admin_token');
+  }, []);
 
   const mutation = useMutation({
     mutationFn: () => adminLogin(email, password),
@@ -55,7 +60,8 @@ export default function AdminLogin() {
 
           {mutation.isError && (
             <div className="bg-red-50 border border-red-300 text-red-700 rounded-lg p-3 text-sm">
-              Invalid credentials. Please try again.
+              {(mutation.error as any)?.response?.data?.detail || (mutation.error as any)?.message || 'Login failed'}
+              {' — '}status: {(mutation.error as any)?.response?.status ?? 'network error'}
             </div>
           )}
 

@@ -16,7 +16,8 @@
       "WebFetch(domain:github.com)",
       "WebSearch",
       "Bash(taskkill:*)",
-      "Bash(echo === All complaints ===:*)"
+      "Bash(echo === All complaints ===:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

@@ -4,6 +4,15 @@ from typing import Optional
 from pydantic import BaseModel
 
 
+class MediaInfo(BaseModel):
+    file_path: str
+    media_type: str
+    original_filename: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class ComplaintCreate(BaseModel):
     description: str
     citizen_email: str
@@ -30,6 +39,10 @@ class ComplaintResponse(BaseModel):
     state: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    media: list[MediaInfo] = []
+    satisfaction_rating: Optional[int] = None
+    verified_fixed: Optional[bool] = None
+    reopen_count: int = 0
 
     class Config:
         from_attributes = True
@@ -60,6 +73,10 @@ class ComplaintTrackResponse(BaseModel):
     ai_analysis: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
+    media: list[MediaInfo] = []
+    satisfaction_rating: Optional[int] = None
+    verified_fixed: Optional[bool] = None
+    reopen_count: int = 0
 
     class Config:
         from_attributes = True

@@ -39,6 +39,10 @@ class Complaint(Base):
 
     classification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_analysis: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    satisfaction_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1-5 stars
+    satisfaction_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verified_fixed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)   # citizen re-verification
+    reopen_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # how many times auto-reopened
 
     email_draft: Mapped[str | None] = mapped_column(Text, nullable=True)
     email_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="0")

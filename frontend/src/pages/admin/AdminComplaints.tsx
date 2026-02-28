@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getAdminComplaints } from '../../services/api';
+import { getAdminComplaints, updateComplaint } from '../../services/api';
 import type { Complaint } from '../../types';
 
 const statusColor: Record<string, string> = {
@@ -36,11 +36,22 @@ export default function AdminComplaints() {
   if (categoryFilter) params.category = categoryFilter;
   if (riskFilter) params.risk_level = riskFilter;
 
+  const queryClient = useQueryClient();
+
   const { data, isLoading, isError } = useQuery<Complaint[]>({
     queryKey: ['adminComplaints', params],
     queryFn: async () => {
       const res = await getAdminComplaints(params);
       return res.data.complaints;
+    },
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      updateComplaint(id, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['adminComplaints'] });
+      queryClient.invalidateQueries({ queryKey: ['adminAnalytics'] });
     },
   });
 
@@ -141,10 +152,16 @@ export default function AdminComplaints() {
                     <td className="px-4 py-3 max-w-xs truncate">{c.description}</td>
                     <td className="px-4 py-3">{c.category || '-'}</td>
                     <td className={`px-4 py-3 ${riskColor[c.risk_level || ''] || ''}`}>{c.risk_level || '-'}</td>
-                    <td className="px-4 py-3">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor[c.status] || 'bg-gray-100'}`}>
-                        {c.status}
-                      </span>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={c.status}
+                        onChange={(e) => statusMutation.mutate({ id: c.id, status: e.target.value })}
+                        className={`text-xs font-medium rounded-full px-2 py-1 border-0 cursor-pointer ${statusColor[c.status] || 'bg-gray-100'}`}
+                      >
+                        {['submitted','processing','categorized','assigned','in_progress','resolved','closed'].map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
                     </td>
                     <td className="px-4 py-3 text-gray-500">{new Date(c.created_at).toLocaleDateString()}</td>
                   </tr>
