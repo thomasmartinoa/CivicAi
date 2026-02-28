@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { getWorkOrders, updateWorkOrder, uploadCompletionPhoto } from '../../services/api';
+import { getWorkOrders, updateWorkOrder, uploadCompletionPhoto, API_BASE_URL } from '../../services/api';
 import type { WorkOrder } from '../../types';
 
 const statusColor: Record<string, string> = {
@@ -108,7 +108,7 @@ export default function AdminWorkOrders() {
         >
           <div className="relative max-w-2xl w-full mx-4" onClick={e => e.stopPropagation()}>
             <button onClick={() => setPreviewPhoto(null)} className="absolute -top-8 right-0 text-white text-2xl">&times;</button>
-            <img src={`http://localhost:8000/${previewPhoto}`} alt="Completion proof" className="w-full rounded-xl shadow-2xl" />
+            <img src={`${API_BASE_URL}/${previewPhoto}`} alt="Completion proof" className="w-full rounded-xl shadow-2xl" />
             <p className="text-center text-white mt-2 text-sm opacity-75">Completion Proof Photo</p>
           </div>
         </div>
@@ -162,7 +162,7 @@ export default function AdminWorkOrders() {
                           title="Click to enlarge proof photo"
                         >
                           <img
-                            src={`http://localhost:8000/${wo.completion_photo}`}
+                            src={`${API_BASE_URL}/${wo.completion_photo}`}
                             alt="proof"
                             className="w-12 h-12 object-cover rounded-lg border-2 border-green-400 group-hover:opacity-80 transition"
                           />

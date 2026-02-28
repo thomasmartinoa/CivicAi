@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getAdminComplaintDetail, approveComplaintEmail } from '../../services/api';
+import { getAdminComplaintDetail, approveComplaintEmail, API_BASE_URL } from '../../services/api';
 
 const statusColor: Record<string, string> = {
   submitted: 'bg-gray-100 text-gray-700',
@@ -225,7 +225,7 @@ export default function AdminComplaintDetail() {
               <div key={m.id} className="border border-gray-200 rounded-lg overflow-hidden">
                 {m.media_type === 'image' ? (
                   <img
-                    src={`http://localhost:8000/${m.file_path}`}
+                    src={`${API_BASE_URL}/${m.file_path}`}
                     alt={m.original_filename || 'Attachment'}
                     className="w-full h-32 object-cover"
                   />
@@ -313,7 +313,7 @@ export default function AdminComplaintDetail() {
             className={`px-6 py-2.5 rounded-lg text-sm font-medium transition ${
               emailStatus === 'approved'
                 ? 'bg-green-100 text-green-700 cursor-not-allowed'
-                : 'bg-blue-900 text-white hover:bg-blue-800'
+                : 'bg-[#3B5BDB] text-white hover:bg-[#364FC7]'
             }`}
           >
             {approveMutation.isPending ? 'Approving...' : emailStatus === 'approved' ? 'Approved' : 'Approve Email'}

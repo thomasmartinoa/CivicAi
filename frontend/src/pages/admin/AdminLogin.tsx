@@ -68,7 +68,7 @@ export default function AdminLogin() {
           <button
             type="submit"
             disabled={mutation.isPending}
-            className="w-full py-3 bg-blue-900 text-white font-semibold rounded-lg hover:bg-blue-800 transition disabled:opacity-50"
+            className="w-full py-3 bg-[#3B5BDB] text-white font-semibold rounded-lg hover:bg-[#364FC7] transition disabled:opacity-50"
           >
             {mutation.isPending ? 'Signing in...' : 'Sign In'}
           </button>

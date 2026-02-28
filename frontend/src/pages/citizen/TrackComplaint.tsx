@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { trackComplaint, requestOTP, verifyOTP, getMyComplaints, rateComplaint, verifyComplaintFixed } from '../../services/api';
+import { trackComplaint, requestOTP, verifyOTP, getMyComplaints, rateComplaint, verifyComplaintFixed, API_BASE_URL } from '../../services/api';
 import type { Complaint } from '../../types';
 
 const STATUS_STEPS = [
@@ -118,7 +118,7 @@ function ComplaintCard({ c: initialC, expanded, onToggle }: { c: Complaint; expa
           {images.map((m, i) => (
             <img
               key={i}
-              src={`http://localhost:8000/${m.file_path}`}
+              src={`${API_BASE_URL}/${m.file_path}`}
               alt={m.original_filename || 'complaint image'}
               className="h-28 w-40 object-cover rounded-lg border border-gray-200 flex-shrink-0"
             />

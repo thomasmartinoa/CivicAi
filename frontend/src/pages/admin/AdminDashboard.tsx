@@ -99,7 +99,7 @@ export default function AdminDashboard() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
         <div className="flex gap-2">
-          <Link to="/admin/complaints" className="px-4 py-2 bg-blue-900 text-white rounded-lg hover:bg-blue-800 transition text-sm">
+          <Link to="/admin/complaints" className="px-4 py-2 bg-[#3B5BDB] text-white rounded-lg hover:bg-[#364FC7] transition text-sm">
             View All Complaints
           </Link>
           <button onClick={handleLogout} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition text-sm">
@@ -114,7 +114,7 @@ export default function AdminDashboard() {
         <button
           onClick={() => generateBriefingMutation.mutate()}
           disabled={generateBriefingMutation.isPending}
-          className="px-4 py-2 bg-blue-900 text-white text-sm rounded-lg hover:bg-blue-800 transition disabled:opacity-50"
+          className="px-4 py-2 bg-[#3B5BDB] text-white text-sm rounded-lg hover:bg-[#364FC7] transition disabled:opacity-50"
         >
           {generateBriefingMutation.isPending ? 'Generating...' : 'Generate Officer Briefing'}
         </button>

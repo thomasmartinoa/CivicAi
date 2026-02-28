@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const api = axios.create({ baseURL: 'http://localhost:8000' });
+export const API_BASE_URL = 'http://localhost:8008';
+
+const api = axios.create({ baseURL: API_BASE_URL });
 
 // Attach admin token to every /admin request
 api.interceptors.request.use((config) => {

@@ -1,1 +1,220 @@
 @import "tailwindcss";
+
+/* === Clean Light Design System === */
+
+:root {
+  --primary: #3B5BDB;
+  --primary-hover: #364FC7;
+  --primary-light: #DBE4FF;
+  --bg-page: #F5F6FA;
+  --bg-card: #FFFFFF;
+  --border: #E5E7EB;
+  --text-primary: #1F2937;
+  --text-secondary: #6B7280;
+  --text-muted: #9CA3AF;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg-page);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text-primary);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Primary button */
+.btn-primary {
+  background: var(--primary);
+  color: white;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(59, 91, 219, 0.2);
+}
+
+.btn-primary:hover {
+  background: var(--primary-hover);
+  box-shadow: 0 2px 8px rgba(59, 91, 219, 0.3);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+/* Outline button */
+.btn-outline {
+  background: transparent;
+  border: 1.5px solid var(--primary);
+  color: var(--primary);
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.btn-outline:hover {
+  background: var(--primary-light);
+}
+
+/* Card */
+.card {
+  background: var(--bg-card);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* Input */
+.input-clean {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+}
+
+.input-clean::placeholder {
+  color: var(--text-muted);
+}
+
+.input-clean:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 91, 219, 0.1);
+  outline: none;
+}
+
+/* Legacy glass classes mapped to light theme for backward compatibility */
+.glass {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.glass-strong {
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.glass-light {
+  background: #f9fafb;
+  border: 1px solid var(--border);
+}
+
+.glass-input {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+}
+
+.glass-input::placeholder {
+  color: var(--text-muted);
+}
+
+.glass-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 91, 219, 0.1);
+  outline: none;
+}
+
+.glass-select {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+}
+
+.glass-select:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.glass-select option {
+  background: #ffffff;
+  color: var(--text-primary);
+}
+
+.btn-gradient {
+  background: var(--primary);
+  color: white;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(59, 91, 219, 0.2);
+}
+
+.btn-gradient:hover {
+  background: var(--primary-hover);
+  box-shadow: 0 2px 8px rgba(59, 91, 219, 0.3);
+  transform: none;
+}
+
+.btn-gradient:disabled {
+  opacity: 0.5;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-glass {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.btn-glass:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.glass-table thead tr {
+  background: #f9fafb;
+  border-bottom: 1px solid var(--border);
+}
+
+.glass-table tbody tr {
+  border-bottom: 1px solid #f3f4f6;
+  transition: background 0.15s ease;
+}
+
+.glass-table tbody tr:hover {
+  background: #f9fafb;
+}
+
+.badge-glass {
+  background: #f3f4f6;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.glass-spinner {
+  border: 3px solid #e5e7eb;
+  border-top: 3px solid var(--primary);
+}
+
+/* Leaflet popup override */
+.leaflet-popup-content-wrapper {
+  background: #ffffff !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-primary) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;
+}
+
+.leaflet-popup-tip {
+  background: #ffffff !important;
+}
