@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 
 
-CLUSTER_THRESHOLD = 3          # min complaints to form a cluster
+CLUSTER_THRESHOLD = 2          # min complaints to form a cluster
 GEO_PRECISION = 2              # decimal places for lat/lng bucketing (~1 km grid)
 LOOKBACK_DAYS = 7              # only look at recent unresolved complaints
 
@@ -18,17 +18,22 @@ async def run_cluster_detection(db: Session):
 
     since = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
     open_complaints = db.query(Complaint).filter(
-        Complaint.status.in_(["submitted", "validated", "classified", "routed"]),
+        Complaint.status.not_in(["resolved", "closed", "grouped"]),
         Complaint.created_at >= since,
         Complaint.category.isnot(None),
     ).all()
 
-    # Bucket complaints by category + geo cell
+    # Bucket complaints by category + geo cell (fall back to district/ward if no GPS)
     buckets: dict[str, list[Complaint]] = {}
     for complaint in open_complaints:
-        lat = round(complaint.latitude or 0, GEO_PRECISION)
-        lng = round(complaint.longitude or 0, GEO_PRECISION)
-        key = f"{complaint.category}|{lat}|{lng}"
+        if complaint.latitude and complaint.longitude and not (complaint.latitude == 0 and complaint.longitude == 0):
+            lat = round(complaint.latitude, GEO_PRECISION)
+            lng = round(complaint.longitude, GEO_PRECISION)
+            geo_key = f"{lat}|{lng}"
+        else:
+            # Fall back to district or ward for grouping
+            geo_key = complaint.district or complaint.ward or "unknown_area"
+        key = f"{complaint.category}|{geo_key}"
         buckets.setdefault(key, []).append(complaint)
 
     clusters_created = 0

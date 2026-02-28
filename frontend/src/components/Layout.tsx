@@ -14,7 +14,6 @@ export default function Layout() {
             <Link to="/" className={`px-3 py-1 rounded ${isActive('/submit') || location.pathname === '/' ? 'bg-blue-700' : ''}`}>Submit Complaint</Link>
             <Link to="/track" className={`px-3 py-1 rounded ${isActive('/track')}`}>Track</Link>
             <Link to="/dashboard" className={`px-3 py-1 rounded ${isActive('/dashboard')}`}>Public Dashboard</Link>
-            <Link to="/pricing" className={`px-3 py-1 rounded ${isActive('/pricing')}`}>Pricing</Link>
             <Link to="/admin" className={`px-3 py-1 rounded ${isActive('/admin')}`}>Admin</Link>
           </div>
         </div>

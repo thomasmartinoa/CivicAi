@@ -11,8 +11,6 @@ import {
 import type { PieLabelRenderProps } from 'recharts';
 
 import { STATE_DISTRICT_MAP, STATE_COORDS } from '../../utils/locations';
-import L from 'leaflet';
-
 
 // Fix leaflet icons
 const iconRetinaUrl = new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).href;

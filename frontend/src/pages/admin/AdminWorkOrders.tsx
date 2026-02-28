@@ -127,7 +127,6 @@ export default function AdminWorkOrders() {
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Contractor</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">SLA Deadline</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Est. Cost</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Completion Photo</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Actions</th>
               </tr>
@@ -135,7 +134,7 @@ export default function AdminWorkOrders() {
             <tbody>
               {(data || []).length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center text-gray-400 py-12">No work orders found</td>
+                  <td colSpan={6} className="text-center text-gray-400 py-12">No work orders found</td>
                 </tr>
               ) : (
                 (data || []).map((wo) => (
@@ -149,9 +148,6 @@ export default function AdminWorkOrders() {
                     </td>
                     <td className="px-4 py-3 text-gray-500">
                       {wo.sla_deadline ? new Date(wo.sla_deadline).toLocaleDateString() : '-'}
-                    </td>
-                    <td className="px-4 py-3 text-gray-700">
-                      {wo.estimated_cost != null ? `$${wo.estimated_cost.toLocaleString()}` : '-'}
                     </td>
                     {/* Completion photo cell */}
                     <td className="px-4 py-3">
