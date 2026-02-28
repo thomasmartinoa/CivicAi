@@ -1,7 +1,7 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
-import { getAdminComplaints } from '../../services/api';
+import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate } from 'react-router-dom';
+import { getAdminComplaints, updateComplaint } from '../../services/api';
 import type { Complaint } from '../../types';
 
 const statusColor: Record<string, string> = {
@@ -22,21 +22,36 @@ const riskColor: Record<string, string> = {
 };
 
 export default function AdminComplaints() {
+  const navigate = useNavigate();
   const [statusFilter, setStatusFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [riskFilter, setRiskFilter] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!localStorage.getItem('admin_token')) navigate('/admin/login');
+  }, [navigate]);
 
   const params: Record<string, string> = {};
   if (statusFilter) params.status = statusFilter;
   if (categoryFilter) params.category = categoryFilter;
   if (riskFilter) params.risk_level = riskFilter;
 
+  const queryClient = useQueryClient();
+
   const { data, isLoading, isError } = useQuery<Complaint[]>({
     queryKey: ['adminComplaints', params],
     queryFn: async () => {
       const res = await getAdminComplaints(params);
       return res.data.complaints;
+    },
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      updateComplaint(id, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['adminComplaints'] });
+      queryClient.invalidateQueries({ queryKey: ['adminAnalytics'] });
     },
   });
 
@@ -78,13 +93,18 @@ export default function AdminComplaints() {
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
         >
           <option value="">All Categories</option>
-          <option value="roads">Roads</option>
-          <option value="water">Water</option>
-          <option value="sanitation">Sanitation</option>
-          <option value="electricity">Electricity</option>
-          <option value="parks">Parks</option>
-          <option value="noise">Noise</option>
-          <option value="other">Other</option>
+          <option value="ROADS">Roads</option>
+          <option value="WATER">Water</option>
+          <option value="SANITATION">Sanitation</option>
+          <option value="ELECTRICITY">Electricity</option>
+          <option value="PUBLIC_SPACES">Public Spaces</option>
+          <option value="HEALTH">Health</option>
+          <option value="FLOODING">Flooding</option>
+          <option value="FIRE_HAZARD">Fire Hazard</option>
+          <option value="CONSTRUCTION">Construction</option>
+          <option value="STRAY_ANIMALS">Stray Animals</option>
+          <option value="SEWAGE">Sewage</option>
+          <option value="EDUCATION">Education</option>
         </select>
         <select
           value={riskFilter}
@@ -123,44 +143,28 @@ export default function AdminComplaints() {
                 </tr>
               ) : (
                 (data || []).map((c) => (
-                  <>
-                    <tr
-                      key={c.id}
-                      onClick={() => setExpandedId(expandedId === c.id ? null : c.id)}
-                      className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition"
-                    >
-                      <td className="px-4 py-3 font-mono text-xs">{c.tracking_id}</td>
-                      <td className="px-4 py-3 max-w-xs truncate">{c.description}</td>
-                      <td className="px-4 py-3">{c.category || '-'}</td>
-                      <td className={`px-4 py-3 ${riskColor[c.risk_level || ''] || ''}`}>{c.risk_level || '-'}</td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor[c.status] || 'bg-gray-100'}`}>
-                          {c.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-gray-500">{new Date(c.created_at).toLocaleDateString()}</td>
-                    </tr>
-                    {expandedId === c.id && (
-                      <tr key={`${c.id}-detail`} className="bg-blue-50">
-                        <td colSpan={6} className="px-6 py-4">
-                          <div className="grid grid-cols-2 gap-4 text-sm">
-                            <div>
-                              <p className="text-gray-500">Full Description</p>
-                              <p className="text-gray-800">{c.description}</p>
-                            </div>
-                            <div className="space-y-2">
-                              <p><span className="text-gray-500">Email:</span> {c.citizen_email}</p>
-                              <p><span className="text-gray-500">Subcategory:</span> {c.subcategory || '-'}</p>
-                              <p><span className="text-gray-500">Priority Score:</span> {c.priority_score ?? '-'}</p>
-                              <p><span className="text-gray-500">Address:</span> {c.address || '-'}</p>
-                              <p><span className="text-gray-500">Ward:</span> {c.ward || '-'} | <span className="text-gray-500">District:</span> {c.district || '-'}</p>
-                              <p><span className="text-gray-500">Updated:</span> {new Date(c.updated_at).toLocaleString()}</p>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </>
+                  <tr
+                    key={c.id}
+                    onClick={() => navigate(`/admin/complaints/${c.id}`)}
+                    className="border-b border-gray-100 hover:bg-blue-50 cursor-pointer transition"
+                  >
+                    <td className="px-4 py-3 font-mono text-xs">{c.tracking_id}</td>
+                    <td className="px-4 py-3 max-w-xs truncate">{c.description}</td>
+                    <td className="px-4 py-3">{c.category || '-'}</td>
+                    <td className={`px-4 py-3 ${riskColor[c.risk_level || ''] || ''}`}>{c.risk_level || '-'}</td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={c.status}
+                        onChange={(e) => statusMutation.mutate({ id: c.id, status: e.target.value })}
+                        className={`text-xs font-medium rounded-full px-2 py-1 border-0 cursor-pointer ${statusColor[c.status] || 'bg-gray-100'}`}
+                      >
+                        {['submitted','processing','categorized','assigned','in_progress','resolved','closed'].map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-3 text-gray-500">{new Date(c.created_at).toLocaleDateString()}</td>
+                  </tr>
                 ))
               )}
             </tbody>

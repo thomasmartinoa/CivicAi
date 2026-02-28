@@ -23,7 +23,7 @@ class BaseAgent(ABC):
         self.name = name
 
     @abstractmethod
-    async def process(self, context: PipelineContext) -> PipelineContext:
+    async def process(self, context: PipelineContext, db=None) -> PipelineContext:
         pass
 
     def log(self, message: str):

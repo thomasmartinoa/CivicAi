@@ -1,13 +1,14 @@
 from app.agents.base import BaseAgent, PipelineContext
 from app.services.media import media_service
 from app.services.geocoding import geocoding_service
+from app.services.llm import llm_service
 
 
 class IntakeAgent(BaseAgent):
     def __init__(self):
         super().__init__(name="IntakeAgent")
 
-    async def process(self, context: PipelineContext) -> PipelineContext:
+    async def process(self, context: PipelineContext, db=None) -> PipelineContext:
         raw = context.raw_input
         description = raw.get("description", "")
         media_texts = []
@@ -18,8 +19,19 @@ class IntakeAgent(BaseAgent):
                     text = await media_service.speech_to_text(media["file_path"])
                     media_texts.append(text)
                     media["extracted_text"] = text
+                    self.log(f"Voice transcribed: {len(text)} chars")
                 except Exception as e:
                     self.log(f"Speech-to-text failed: {e}")
+
+            elif media.get("media_type") == "image":
+                try:
+                    text = await llm_service.analyze_image(media["file_path"])
+                    if text and "No infrastructure issues" not in text:
+                        media_texts.append(f"[Image analysis: {text}]")
+                        media["extracted_text"] = text
+                        self.log(f"Image analyzed: {text[:80]}...")
+                except Exception as e:
+                    self.log(f"Image analysis failed: {e}")
 
         full_description = description
         if media_texts:
@@ -41,6 +53,7 @@ class IntakeAgent(BaseAgent):
         context.data["ward"] = location_data.get("ward", "")
         context.data["block"] = location_data.get("block", "")
         context.data["district"] = location_data.get("district", "")
+        context.data["state"] = location_data.get("state", "")
         context.data["media_files"] = raw.get("media_files", [])
         context.data["media_texts"] = media_texts
         context.data["intake_complete"] = True

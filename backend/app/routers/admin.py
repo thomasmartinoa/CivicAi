@@ -1,7 +1,7 @@
 from typing import Optional
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -46,13 +46,129 @@ async def list_complaints(
                 "description": c.description, "category": c.category,
                 "subcategory": c.subcategory, "priority_score": c.priority_score,
                 "risk_level": c.risk_level, "address": c.address,
-                "citizen_email": c.citizen_email,
+                "ward": c.ward, "district": c.district,
+                "citizen_email": c.citizen_email, "citizen_name": c.citizen_name,
                 "created_at": c.created_at.isoformat() if c.created_at else None,
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
             }
             for c in complaints
         ],
         "total": total,
     }
+
+
+@router.get("/complaints/{complaint_id}")
+async def get_complaint_detail(
+    complaint_id: str,
+    user: User = Depends(require_officer_or_admin),
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy.orm import joinedload
+    from app.agents.router import CATEGORY_DEPARTMENT_MAP
+    from app.services.llm import llm_service
+
+    complaint = db.query(Complaint).options(
+        joinedload(Complaint.media),
+        joinedload(Complaint.work_order),
+    ).filter(Complaint.id == complaint_id).first()
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    # Build media list
+    media_list = [
+        {
+            "id": str(m.id),
+            "file_path": m.file_path,
+            "media_type": m.media_type,
+            "original_filename": m.original_filename,
+        }
+        for m in (complaint.media or [])
+    ]
+
+    # Work order info
+    wo = complaint.work_order
+    work_order_data = None
+    if wo:
+        work_order_data = {
+            "id": str(wo.id),
+            "status": wo.status,
+            "sla_deadline": wo.sla_deadline.isoformat() if wo.sla_deadline else None,
+            "estimated_cost": wo.estimated_cost,
+            "notes": wo.notes,
+            "contractor_id": str(wo.contractor_id) if wo.contractor_id else None,
+            "created_at": wo.created_at.isoformat() if wo.created_at else None,
+            "completed_at": wo.completed_at.isoformat() if getattr(wo, 'completed_at', None) else None,
+        }
+
+    # Department name from category
+    department_name = CATEGORY_DEPARTMENT_MAP.get(complaint.category or "", "General Administration")
+
+    # Generate email draft if not already saved
+    email_draft = complaint.email_draft
+    if not email_draft:
+        email_data = {
+            "tracking_id": complaint.tracking_id,
+            "category": complaint.category,
+            "department_name": department_name,
+            "description": complaint.description,
+            "risk_level": complaint.risk_level,
+            "priority_score": complaint.priority_score,
+            "address": complaint.address,
+            "ward": complaint.ward,
+            "district": complaint.district,
+            "state": complaint.state,
+            "citizen_name": complaint.citizen_name or "A citizen",
+            "sla_deadline": wo.sla_deadline.isoformat() if wo and wo.sla_deadline else "",
+        }
+        try:
+            email_draft = await llm_service.generate_email_draft(email_data)
+        except Exception:
+            email_draft = llm_service._fallback_email(email_data)
+
+    return {
+        "id": str(complaint.id),
+        "tracking_id": complaint.tracking_id,
+        "status": complaint.status,
+        "description": complaint.description,
+        "citizen_email": complaint.citizen_email,
+        "citizen_name": complaint.citizen_name,
+        "citizen_phone": complaint.citizen_phone,
+        "category": complaint.category,
+        "subcategory": complaint.subcategory,
+        "priority_score": complaint.priority_score,
+        "risk_level": complaint.risk_level,
+        "address": complaint.address,
+        "ward": complaint.ward,
+        "district": complaint.district,
+        "state": complaint.state,
+        "latitude": complaint.latitude,
+        "longitude": complaint.longitude,
+        "ai_analysis": complaint.ai_analysis,
+        "created_at": complaint.created_at.isoformat() if complaint.created_at else None,
+        "updated_at": complaint.updated_at.isoformat() if complaint.updated_at else None,
+        "media": media_list,
+        "work_order": work_order_data,
+        "department_name": department_name,
+        "email_draft": email_draft,
+        "email_approved": complaint.email_approved,
+    }
+
+
+@router.post("/complaints/{complaint_id}/approve-email")
+async def approve_complaint_email(
+    complaint_id: str,
+    body: dict,
+    user: User = Depends(require_officer_or_admin),
+    db: Session = Depends(get_db),
+):
+    complaint = db.query(Complaint).filter(Complaint.id == complaint_id).first()
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    complaint.email_draft = body.get("email_draft", complaint.email_draft or "")
+    complaint.email_approved = True
+    db.commit()
+    return {"message": "Email approved successfully", "email_approved": True}
 
 
 @router.patch("/complaints/{complaint_id}")
@@ -95,6 +211,7 @@ async def list_work_orders(
                 "sla_deadline": wo.sla_deadline.isoformat() if wo.sla_deadline else None,
                 "estimated_cost": wo.estimated_cost, "notes": wo.notes,
                 "created_at": wo.created_at.isoformat() if wo.created_at else None,
+                "completion_photo": f"media/{wo.completion_photo}" if wo.completion_photo else None,
             }
             for wo in orders
         ]
@@ -109,18 +226,87 @@ async def update_work_order(
     wo = db.query(WorkOrder).filter(WorkOrder.id == work_order_id).first()
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
+
+    prev_status = wo.status
+    prev_contractor_id = wo.contractor_id
+
     if data.status:
         wo.status = data.status
         if data.status == "completed":
+            if not wo.completion_photo:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Upload a completion photo before marking work as completed"
+                )
             from datetime import datetime, timezone
             wo.completed_at = datetime.now(timezone.utc)
+            # Sync complaint → resolved
+            complaint = db.query(Complaint).filter(Complaint.id == wo.complaint_id).first()
+            if complaint:
+                complaint.status = "resolved"
+        elif data.status == "in_progress":
+            # Sync complaint → in_progress
+            complaint = db.query(Complaint).filter(Complaint.id == wo.complaint_id).first()
+            if complaint and complaint.status not in ("resolved", "closed"):
+                complaint.status = "in_progress"
+        elif data.status == "assigned":
+            complaint = db.query(Complaint).filter(Complaint.id == wo.complaint_id).first()
+            if complaint and complaint.status not in ("resolved", "closed", "in_progress"):
+                complaint.status = "assigned"
+        # Sync contractor active_workload
+        active_statuses = {"created", "assigned", "in_progress"}
+        was_active = prev_status in active_statuses
+        is_active = data.status in active_statuses
+        if was_active and not is_active and prev_contractor_id:
+            contractor = db.query(Contractor).filter(Contractor.id == prev_contractor_id).first()
+            if contractor and contractor.active_workload > 0:
+                contractor.active_workload -= 1
+        elif not was_active and is_active and (data.contractor_id or wo.contractor_id):
+            cid = data.contractor_id or wo.contractor_id
+            contractor = db.query(Contractor).filter(Contractor.id == cid).first()
+            if contractor:
+                contractor.active_workload += 1
+
     if data.notes:
         wo.notes = data.notes
     if data.contractor_id:
+        # Transferring contractor — decrement old, increment new
+        if prev_contractor_id and prev_contractor_id != data.contractor_id and wo.status in {"assigned", "in_progress"}:
+            old_c = db.query(Contractor).filter(Contractor.id == prev_contractor_id).first()
+            if old_c and old_c.active_workload > 0:
+                old_c.active_workload -= 1
+            new_c = db.query(Contractor).filter(Contractor.id == data.contractor_id).first()
+            if new_c:
+                new_c.active_workload += 1
         wo.contractor_id = data.contractor_id
         wo.officer_id = user.id
     db.commit()
     return {"message": "Work order updated"}
+
+
+@router.post("/work-orders/{work_order_id}/completion-photo")
+async def upload_completion_photo(
+    work_order_id: str,
+    photo: UploadFile = File(...),
+    user: User = Depends(require_officer_or_admin),
+    db: Session = Depends(get_db),
+):
+    """Upload a before/after completion proof photo for a work order."""
+    wo = db.query(WorkOrder).filter(WorkOrder.id == work_order_id).first()
+    if not wo:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    from app.services.media import media_service
+    import shutil, os
+    from pathlib import Path
+    ext = os.path.splitext(photo.filename or "photo.jpg")[1] or ".jpg"
+    import uuid
+    filename = f"completion_{uuid.uuid4().hex}{ext}"
+    save_path = media_service.upload_dir / filename
+    with open(save_path, "wb") as f:
+        shutil.copyfileobj(photo.file, f)
+    wo.completion_photo = filename
+    db.commit()
+    return {"message": "Completion photo uploaded", "filename": filename, "url": f"media/{filename}"}
 
 
 @router.get("/analytics")
@@ -129,10 +315,100 @@ async def get_analytics(user: User = Depends(require_officer_or_admin), db: Sess
     if user.tenant_id:
         query = query.filter(Complaint.tenant_id == user.tenant_id)
     total = query.count()
-    by_status = dict(db.query(Complaint.status, func.count(Complaint.id)).group_by(Complaint.status).all())
-    by_category = dict(db.query(Complaint.category, func.count(Complaint.id)).filter(Complaint.category.isnot(None)).group_by(Complaint.category).all())
-    by_risk = dict(db.query(Complaint.risk_level, func.count(Complaint.id)).filter(Complaint.risk_level.isnot(None)).group_by(Complaint.risk_level).all())
+    by_status = dict(query.with_entities(Complaint.status, func.count(Complaint.id)).group_by(Complaint.status).all())
+    by_category = dict(query.with_entities(Complaint.category, func.count(Complaint.id)).filter(Complaint.category.isnot(None)).group_by(Complaint.category).all())
+    by_risk = dict(query.with_entities(Complaint.risk_level, func.count(Complaint.id)).filter(Complaint.risk_level.isnot(None)).group_by(Complaint.risk_level).all())
     return {"total_complaints": total, "by_status": by_status, "by_category": by_category, "by_risk_level": by_risk}
+
+
+@router.get("/analytics/performance")
+async def get_performance_metrics(user: User = Depends(require_officer_or_admin), db: Session = Depends(get_db)):
+    from datetime import datetime, timezone
+    from app.models.escalation import Escalation
+
+    wo_query = db.query(WorkOrder)
+    c_query = db.query(Complaint)
+    if user.tenant_id:
+        wo_query = wo_query.filter(WorkOrder.tenant_id == user.tenant_id)
+        c_query = c_query.filter(Complaint.tenant_id == user.tenant_id)
+
+    # Average resolution time (hours) per category
+    completed_orders = wo_query.filter(WorkOrder.completed_at.isnot(None)).all()
+    resolution_times: dict[str, list[float]] = {}
+    sla_breaches = 0
+    sla_total = 0
+    for wo in completed_orders:
+        complaint = db.query(Complaint).filter(Complaint.id == wo.complaint_id).first()
+        if not complaint:
+            continue
+        created = wo.created_at
+        completed = wo.completed_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if completed.tzinfo is None:
+            completed = completed.replace(tzinfo=timezone.utc)
+        hours = (completed - created).total_seconds() / 3600
+        cat = complaint.category or "UNKNOWN"
+        resolution_times.setdefault(cat, []).append(hours)
+        if wo.sla_deadline:
+            sla_dl = wo.sla_deadline
+            if sla_dl.tzinfo is None:
+                sla_dl = sla_dl.replace(tzinfo=timezone.utc)
+            sla_total += 1
+            if completed > sla_dl:
+                sla_breaches += 1
+
+    avg_resolution_by_category = {
+        cat: round(sum(times) / len(times), 1)
+        for cat, times in resolution_times.items()
+    }
+    sla_breach_rate = round((sla_breaches / sla_total * 100), 1) if sla_total > 0 else 0.0
+
+    # Contractor performance
+    contractor_stats: dict[str, dict] = {}
+    for wo in completed_orders:
+        if not wo.contractor_id:
+            continue
+        cid = str(wo.contractor_id)
+        if cid not in contractor_stats:
+            contractor = db.query(Contractor).filter(Contractor.id == cid).first()
+            contractor_stats[cid] = {
+                "name": contractor.name if contractor else cid,
+                "completed": 0,
+                "total_hours": 0.0,
+            }
+        contractor_stats[cid]["completed"] += 1
+        created = wo.created_at
+        completed_at = wo.completed_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=timezone.utc)
+        contractor_stats[cid]["total_hours"] += (completed_at - created).total_seconds() / 3600
+
+    contractor_performance = [
+        {
+            "contractor_id": cid,
+            "name": stats["name"],
+            "completed_orders": stats["completed"],
+            "avg_resolution_hours": round(stats["total_hours"] / stats["completed"], 1) if stats["completed"] else 0,
+        }
+        for cid, stats in contractor_stats.items()
+    ]
+
+    # Escalation count
+    escalation_count = db.query(Escalation).join(
+        Complaint, Escalation.complaint_id == Complaint.id
+    ).filter(Complaint.tenant_id == user.tenant_id).count() if user.tenant_id else db.query(Escalation).count()
+
+    return {
+        "avg_resolution_hours_by_category": avg_resolution_by_category,
+        "sla_breach_rate_percent": sla_breach_rate,
+        "sla_breaches": sla_breaches,
+        "sla_total_measured": sla_total,
+        "contractor_performance": contractor_performance,
+        "total_escalations": escalation_count,
+    }
 
 
 @router.get("/contractors")
@@ -148,3 +424,49 @@ async def list_contractors(user: User = Depends(require_officer_or_admin), db: S
             for c in contractors
         ]
     }
+
+
+@router.get("/briefing")
+async def get_latest_briefing(user: User = Depends(require_officer_or_admin), db: Session = Depends(get_db)):
+    """Return the most recent daily officer briefing."""
+    from app.models.daily_briefing import DailyBriefing
+    briefing = db.query(DailyBriefing).order_by(DailyBriefing.created_at.desc()).first()
+    if not briefing:
+        return {"briefing": None, "message": "No briefing generated yet. Trigger one via POST /admin/briefing/generate"}
+    return {
+        "briefing": {
+            "id": briefing.id,
+            "brief_date": briefing.brief_date.isoformat(),
+            "new_complaints": briefing.new_complaints,
+            "resolved_today": briefing.resolved_today,
+            "sla_at_risk": briefing.sla_at_risk,
+            "escalations_today": briefing.escalations_today,
+            "narrative": briefing.narrative,
+            "created_at": briefing.created_at.isoformat(),
+        }
+    }
+
+
+@router.post("/briefing/generate")
+async def trigger_briefing(user: User = Depends(require_officer_or_admin), db: Session = Depends(get_db)):
+    """Manually trigger a daily briefing generation (for demo/testing)."""
+    from app.agents.briefing import generate_daily_briefing
+    briefing = await generate_daily_briefing(db)
+    return {
+        "message": "Briefing generated",
+        "narrative": briefing.narrative,
+        "stats": {
+            "new_complaints": briefing.new_complaints,
+            "resolved_today": briefing.resolved_today,
+            "sla_at_risk": briefing.sla_at_risk,
+            "escalations_today": briefing.escalations_today,
+        }
+    }
+
+
+@router.post("/cluster/detect")
+async def trigger_cluster_detection(user: User = Depends(require_officer_or_admin), db: Session = Depends(get_db)):
+    """Manually trigger cluster detection (for demo/testing)."""
+    from app.agents.cluster import run_cluster_detection
+    clusters_created = await run_cluster_detection(db)
+    return {"message": f"Cluster detection complete. Clusters created: {clusters_created}"}

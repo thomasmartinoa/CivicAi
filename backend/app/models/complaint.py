@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime, Float, Integer, Text, JSON, ForeignKey
+from sqlalchemy import String, DateTime, Float, Integer, Text, JSON, ForeignKey, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -35,9 +35,17 @@ class Complaint(Base):
     ward: Mapped[str | None] = mapped_column(String(100), nullable=True)
     block: Mapped[str | None] = mapped_column(String(100), nullable=True)
     district: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    state: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     classification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_analysis: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    satisfaction_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1-5 stars
+    satisfaction_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verified_fixed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)   # citizen re-verification
+    reopen_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # how many times auto-reopened
+
+    email_draft: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="0")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

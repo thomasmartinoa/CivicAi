@@ -8,7 +8,7 @@ class ClassificationAgent(BaseAgent):
     def __init__(self):
         super().__init__(name="ClassificationAgent")
 
-    async def process(self, context: PipelineContext) -> PipelineContext:
+    async def process(self, context: PipelineContext, db=None) -> PipelineContext:
         description = context.data.get("description", "")
         media_text = " ".join(context.data.get("media_texts", []))
 

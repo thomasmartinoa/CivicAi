@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useState, useEffect } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { adminLogin } from '../../services/api';
 
@@ -7,11 +7,18 @@ export default function AdminLogin() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  // Always wipe any stale token when the login page loads
+  useEffect(() => {
+    localStorage.removeItem('admin_token');
+  }, []);
 
   const mutation = useMutation({
     mutationFn: () => adminLogin(email, password),
     onSuccess: (res) => {
       localStorage.setItem('admin_token', res.data.access_token);
+      queryClient.clear();  // wipe any cached 401 errors
       navigate('/admin');
     },
   });
@@ -53,14 +60,15 @@ export default function AdminLogin() {
 
           {mutation.isError && (
             <div className="bg-red-50 border border-red-300 text-red-700 rounded-lg p-3 text-sm">
-              Invalid credentials. Please try again.
+              {(mutation.error as any)?.response?.data?.detail || (mutation.error as any)?.message || 'Login failed'}
+              {' — '}status: {(mutation.error as any)?.response?.status ?? 'network error'}
             </div>
           )}
 
           <button
             type="submit"
             disabled={mutation.isPending}
-            className="w-full py-3 bg-blue-900 text-white font-semibold rounded-lg hover:bg-blue-800 transition disabled:opacity-50"
+            className="w-full py-3 bg-[#3B5BDB] text-white font-semibold rounded-lg hover:bg-[#364FC7] transition disabled:opacity-50"
           >
             {mutation.isPending ? 'Signing in...' : 'Sign In'}
           </button>
