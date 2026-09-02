@@ -1571,21 +1571,38 @@ Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Point Alembic at the new metadata**
 
-Replace the metadata wiring in `backend/alembic/env.py`. Find the `target_metadata` assignment and the model imports, and replace them with:
+`backend/alembic/env.py` already sets the URL from settings at module level and already
+assigns `target_metadata = Base.metadata`. The only broken part is the import of v1's
+`app.database`. Make exactly this edit and nothing else.
+
+Find these two lines near the top of `backend/alembic/env.py`:
 
 ```python
+from app.config import settings
+from app.database import Base
+```
+
+Replace them with:
+
+```python
+from app.config import settings
 from app.db.base import Base
 import app.db.models  # noqa: F401 — registers every model on Base.metadata
-from app.config import settings
-
-target_metadata = Base.metadata
 ```
 
-Also ensure the URL comes from settings rather than `alembic.ini`. In `run_migrations_online()` and `run_migrations_offline()`, use:
+Do **not** add `config.set_main_option(...)` calls inside `run_migrations_online()` or
+`run_migrations_offline()` — line 16 of the file already does it at module level, which
+covers both modes. Leave `alembic.ini`'s `sqlalchemy.url` alone; it is overridden at
+runtime.
 
-```python
-config.set_main_option("sqlalchemy.url", settings.database_url)
+Verify the edit:
+
+```bash
+cd backend && grep -n "app.db" alembic/env.py
 ```
+
+Expected: two lines — the `from app.db.base import Base` import and the
+`import app.db.models` registration.
 
 - [ ] **Step 6: Generate the baseline migration**
 
@@ -1838,11 +1855,15 @@ Expected: PASS, 5 tests.
 cd backend
 DATABASE_URL="sqlite:///./civicai.db" python -m alembic upgrade head
 python -m uvicorn app.main:app --port 8000 &
+UVICORN_PID=$!
 sleep 3
-curl -s localhost:8000/health
-curl -s -X POST localhost:8000/admin/seed
-kill %1
+curl -s localhost:8000/health; echo
+curl -s -X POST localhost:8000/admin/seed; echo
+kill "$UVICORN_PID"
 ```
+
+`kill %1` is not used here: job control is disabled in non-interactive shells, so it
+would fail and leave the server running.
 
 Expected: `{"status":"ok","version":"2.0.0-phase0"}` then `{"message":"Database seeded successfully","tenant_id":"..."}`.
 
