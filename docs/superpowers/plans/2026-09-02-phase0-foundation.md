@@ -26,7 +26,7 @@
 - **Import rule:** `app/ai/` must never import from `app/api/`. `app/api/` must never import `app/ai/graph/` directly (Phase 1 adds `app/ai/graph/runner.py` as the only entry point).
 - **Timezone rule:** all datetimes are stored UTC-naive (SQLite has no tzinfo). Always construct with `datetime.now(timezone.utc)` and re-tag naive values with `.replace(tzinfo=timezone.utc)` before arithmetic.
 - **One `gen_uuid`.** v1 redefined it in every model file. It lives in `app/db/base.py` and is imported everywhere.
-- **Every commit message ends with the trailer** `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` (required by the session's configuration).
+- **Commit messages carry no `Co-Authored-By` trailer.** The repository owner asked for none.
 - **Out of scope for Phase 0:** any LangGraph, LangChain, RAG or LLM code. Phase 0 must not add those dependencies.
 
 ---
@@ -363,9 +363,9 @@ _KEYWORD_MAP: list[tuple[Category, list[str]]] = [
     (Category.HEALTH, ["hospital", "ambulance", "clinic", "health", "medical",
                        "medicine", "patient", "doctor"]),
     (Category.PUBLIC_SPACES, ["park", "tree", "garden", "bench", "playground",
-                              "public", "fallen tree"]),
+                              "footpath", "public", "fallen tree"]),
     (Category.EDUCATION, ["school", "college", "education", "classroom", "student",
-                          "toilet", "restroom"]),
+                          "toilet", "restroom", "building"]),
     (Category.CONSTRUCTION, ["construction", "illegal", "excavation", "digging",
                              "building", "demolish", "encroach"]),
     (Category.STRAY_ANIMALS, ["dog", "stray", "animal", "cattle", "cow", "buffalo",
@@ -414,9 +414,7 @@ Port the v1 keyword classifier to app/evals/baseline.py as the naive baseline
 for Phase 3 evaluation — the only v1 code carried forward.
 
 Fixes v1 Bug 3 by construction: CATEGORY_DEPARTMENT now maps CONSTRUCTION and
-SEWAGE to departments that are actually seeded, with a test enforcing it.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+SEWAGE to departments that are actually seeded, with a test enforcing it."
 ```
 
 ---
@@ -708,9 +706,7 @@ git commit -m "feat: add database layer and core domain models
 
 Single gen_uuid() and utcnow() in db/base.py rather than v1's per-file
 redefinition. Department.categories is now the authoritative category mapping
-and will be read by the routing node instead of a hardcoded dict.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+and will be read by the routing node instead of a hardcoded dict."
 ```
 
 ---
@@ -1080,9 +1076,7 @@ terminal_reason so a rejection is distinguishable from a crash.
 
 Structural fixes for two v1 bugs: WorkOrder.is_cluster replaces a
 'notes LIKE %[CLUSTER]%' query, and Notification.dedupe_key gives SLA warnings
-an idempotency guard.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+an idempotency guard."
 ```
 
 ---
@@ -1386,9 +1380,7 @@ git commit -m "feat: add AI observability and evaluation tables
 agent_runs, agent_steps and retrieved_chunks back the in-app trace viewer so it
 works without a LangSmith account. documents/document_chunks record which
 embedding model built an index. eval_runs.config_label is what makes the
-baseline-vs-v2 comparison table possible.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+baseline-vs-v2 comparison table possible."
 ```
 
 ---
@@ -1674,9 +1666,7 @@ git commit -m "feat: add Alembic baseline migration and seed data
 Departments are derived from CATEGORY_DEPARTMENT rather than a parallel list,
 so the v1 drift that left two categories pointing at nonexistent departments
 cannot recur. Tests assert every category is claimed by exactly one seeded
-department, and that the migration creates all 17 tables.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+department, and that the migration creates all 17 tables."
 ```
 
 ---
@@ -1886,9 +1876,7 @@ Tables are created only by migrations, never at startup — v1 called
 create_tables() in its lifespan and so never exercised its own migrations.
 
 Adds architectural boundary tests enforcing that app/ai never imports app/api
-and that app/api reaches the graph only through the runner.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+and that app/api reaches the graph only through the runner."
 ```
 
 ---
