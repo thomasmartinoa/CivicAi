@@ -15,7 +15,12 @@
 ## Global Constraints
 
 - **Python 3.14.** All dependencies must have cp314-compatible wheels.
-- **Package versions** (pin exactly): `fastapi==0.115.0`, `sqlalchemy==2.0.35`, `alembic==1.13.2`, `pydantic==2.9.0`, `pydantic-settings==2.5.0`, `pytest==8.3.3`, `pytest-asyncio==0.24.0`.
+- **Package versions** (pin exactly): `fastapi==0.115.0`, `sqlalchemy==2.0.35`, `alembic==1.13.2`, `pydantic==2.12.3`, `pydantic-settings==2.5.0`, `pytest==8.3.3`, `pytest-asyncio==0.24.0`.
+  - `pydantic` is 2.12.3, **not** 2.9.0: 2.9.0 requires `pydantic-core==2.23.2`, which publishes no
+    cp314 wheel and fails to build from source on Python 3.14. 2.12.3 is the lowest version with
+    cp314 support. The Python 3.14 platform constraint wins over the original pin.
+- **Virtualenv:** `backend/.venv` (already covered by `.gitignore`). Run tests as
+  `cd backend && .venv/bin/python -m pytest`.
 - **Relational store is SQLite.** All primary keys are `String(36)` holding UUID strings — never a native UUID type. All array/object columns use `JSON`.
 - **Password hashing calls `bcrypt` directly**, never `passlib` (Python 3.14 incompatibility).
 - **Import rule:** `app/ai/` must never import from `app/api/`. `app/api/` must never import `app/ai/graph/` directly (Phase 1 adds `app/ai/graph/runner.py` as the only entry point).
