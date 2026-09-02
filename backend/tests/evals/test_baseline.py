@@ -29,3 +29,12 @@ def test_confidence_is_always_a_float_between_zero_and_one():
 def test_returns_a_real_category_enum_member():
     result = keyword_classify("garbage overflowing from the dustbin")
     assert isinstance(result.category, Category)
+
+
+def test_building_only_text_matches_v1_education_not_construction():
+    """v1 checks EDUCATION before CONSTRUCTION and first-to-score wins.
+
+    Guards the keyword map against silent drift from the v1 behaviour this
+    baseline exists to reproduce.
+    """
+    assert keyword_classify("the building is falling apart").category == Category.EDUCATION
