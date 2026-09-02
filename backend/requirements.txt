@@ -5,7 +5,7 @@ python-multipart==0.0.9
 aiofiles==24.1.0
 
 # ── Database ───────────────────────────────────────
-sqlalchemy==2.0.35
+sqlalchemy==2.0.52
 alembic==1.13.2
 
 # ── Config & validation ────────────────────────────

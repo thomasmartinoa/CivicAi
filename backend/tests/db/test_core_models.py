@@ -59,3 +59,13 @@ def test_created_at_is_populated_automatically(db_session):
     db_session.add(tenant)
     db_session.commit()
     assert tenant.created_at is not None
+
+
+def test_nullable_is_inferred_from_optional_annotations(db_session):
+    """SQLAlchemy < 2.0.52 cannot parse `Mapped[X | None]` on Python 3.14.
+
+    Pinning this makes a downgrade fail here rather than at import time.
+    """
+    assert Tenant.__table__.c.config.nullable is True
+    assert Tenant.__table__.c.name.nullable is False
+    assert Contractor.__table__.c.zone.nullable is True
