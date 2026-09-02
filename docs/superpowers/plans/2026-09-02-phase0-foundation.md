@@ -15,7 +15,11 @@
 ## Global Constraints
 
 - **Python 3.14.** All dependencies must have cp314-compatible wheels.
-- **Package versions** (pin exactly): `fastapi==0.115.0`, `sqlalchemy==2.0.35`, `alembic==1.13.2`, `pydantic==2.12.3`, `pydantic-settings==2.5.0`, `pytest==8.3.3`, `pytest-asyncio==0.24.0`.
+- **Package versions** (pin exactly): `fastapi==0.115.0`, `sqlalchemy==2.0.52`, `alembic==1.13.2`, `pydantic==2.12.3`, `pydantic-settings==2.5.0`, `pytest==8.3.3`, `pytest-asyncio==0.24.0`.
+  - `sqlalchemy` is 2.0.52, **not** 2.0.35: under Python 3.14, SQLAlchemy 2.0.35 raises
+    `TypeError: descriptor '__getitem__' requires a 'typing.Union' object but received a 'tuple'`
+    at class-definition time for any `Mapped[X | None]` column annotation. 2.0.52 handles it and
+    correctly infers `nullable=True` from the union, so the idiomatic annotation stays.
   - `pydantic` is 2.12.3, **not** 2.9.0: 2.9.0 requires `pydantic-core==2.23.2`, which publishes no
     cp314 wheel and fails to build from source on Python 3.14. 2.12.3 is the lowest version with
     cp314 support. The Python 3.14 platform constraint wins over the original pin.
