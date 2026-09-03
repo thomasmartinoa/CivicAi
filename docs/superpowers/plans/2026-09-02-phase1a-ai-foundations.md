@@ -18,7 +18,10 @@
 
 - **Python 3.14.** Virtualenv at `backend/.venv`. Tests: `cd backend && .venv/bin/python -m pytest`.
 - **New pins** (all verified to install and run on 3.14): `langchain==1.3.18`, `langgraph==1.2.11`, `langchain-core==1.6.1`, `langchain-google-genai==4.4.0`, `langgraph-checkpoint-sqlite==3.1.1`, `aiosqlite==0.22.1`, `langsmith==0.12.1`.
-- **Existing pins are unchanged**: `pydantic==2.12.3` satisfies langchain-core's `pydantic<3.0.0,>=2.7.4`. Do not bump it.
+- **Two Phase 0 pins must be raised** — `google-genai` (pulled in by `langchain-google-genai`) requires
+  `httpx>=0.28.1` and `pydantic>=2.12.5`, and Phase 0 pinned `httpx==0.27.0` / `pydantic==2.12.3`.
+  Change those two lines to `httpx==0.28.1` and `pydantic==2.12.5`. Verified: with those bumps the
+  whole AI stack resolves and all 51 Phase 0 tests still pass. Do not raise them further than needed.
 - **`app/ai/` must never import `app/api/`.** Enforced by `tests/test_import_rules.py`.
 - **No network in tests.** Every test must pass with no API key set and no internet.
 - **`with_structured_output` does not exist on LangChain's fake chat models.** Verified: both `GenericFakeChatModel` and `FakeListChatModel` raise `NotImplementedError`. Therefore **nodes must accept an injected structured runnable, never a raw model** — otherwise they are untestable. `app/ai/llm.py` is the only module that calls `.with_structured_output(...)`.
@@ -70,8 +73,22 @@ Every value an LLM produces gets a Pydantic model with real constraints. This is
 Every later task imports from these, so they go in first rather than mid-plan.
 All versions are verified to install and run on Python 3.14.
 
+First raise the two Phase 0 pins that block the AI stack. `google-genai`, pulled in by
+`langchain-google-genai`, requires `httpx>=0.28.1` and `pydantic>=2.12.5`; without this the
+install fails with `ResolutionImpossible`.
+
 ```bash
 cd backend
+sed -i 's/^httpx==0.27.0$/httpx==0.28.1/' requirements.txt
+sed -i 's/^pydantic==2.12.3$/pydantic==2.12.5/' requirements.txt
+grep -E '^(httpx|pydantic)==' requirements.txt
+```
+
+Expected: `httpx==0.28.1` and `pydantic==2.12.5`.
+
+Then append the AI stack and install:
+
+```bash
 cat >> requirements.txt <<'REQEOF'
 
 # ── AI (Phase 1) ───────────────────────────────────
