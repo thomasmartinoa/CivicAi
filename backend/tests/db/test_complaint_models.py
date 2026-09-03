@@ -2,15 +2,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models.complaint import Complaint, ComplaintMedia
-from app.db.models.core import Tenant
 from app.db.models.workflow import Escalation, Notification, WorkOrder
-
-
-def _tenant(db_session):
-    tenant = Tenant(name="BMC")
-    db_session.add(tenant)
-    db_session.flush()
-    return tenant
 
 
 def test_complaint_requires_a_tracking_id(db_session):
@@ -89,6 +81,22 @@ def test_work_order_flags_clusters_with_a_boolean(db_session):
 
     assert order.status == "created"
     assert order.is_cluster is True
+
+
+def test_a_complaint_cannot_have_two_work_orders(db_session):
+    """Complaint.work_order is uselist=False; the schema must enforce it."""
+    complaint = Complaint(
+        tracking_id="CIV-DUPWO001",
+        citizen_email="a@b.com",
+        description="Streetlight out on the corner",
+    )
+    db_session.add(complaint)
+    db_session.flush()
+
+    db_session.add(WorkOrder(complaint_id=complaint.id))
+    db_session.add(WorkOrder(complaint_id=complaint.id))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
 
 
 def test_notification_dedupe_key_is_unique(db_session):

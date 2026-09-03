@@ -10,7 +10,12 @@ class WorkOrder(Base):
     __tablename__ = "work_orders"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
-    complaint_id: Mapped[str] = mapped_column(String(36), ForeignKey("complaints.id"), nullable=False)
+    # unique: Complaint.work_order is uselist=False, so the 1:1 invariant must be
+    # enforced by the schema. Without it a second row for the same complaint inserts
+    # cleanly and only explodes later as MultipleResultsFound on attribute access.
+    complaint_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("complaints.id"), nullable=False, unique=True
+    )
     tenant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tenants.id"))
     contractor_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("contractors.id"))
     officer_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"))
