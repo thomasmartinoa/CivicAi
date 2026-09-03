@@ -59,9 +59,15 @@ class Complaint(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
-    media: Mapped[list["ComplaintMedia"]] = relationship(back_populates="complaint")
-    work_order: Mapped["WorkOrder | None"] = relationship(back_populates="complaint", uselist=False)
-    escalations: Mapped[list["Escalation"]] = relationship(back_populates="complaint")
+    media: Mapped[list["ComplaintMedia"]] = relationship(
+        back_populates="complaint", cascade="all, delete-orphan"
+    )
+    work_order: Mapped["WorkOrder | None"] = relationship(
+        back_populates="complaint", uselist=False, cascade="all, delete-orphan"
+    )
+    escalations: Mapped[list["Escalation"]] = relationship(
+        back_populates="complaint", cascade="all, delete-orphan"
+    )
 
 
 class ComplaintMedia(Base):

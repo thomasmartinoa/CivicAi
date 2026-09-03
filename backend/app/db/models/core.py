@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, gen_uuid, utcnow
@@ -21,6 +21,7 @@ class Tenant(Base):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     tenant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tenants.id"))

@@ -129,3 +129,25 @@ def test_escalation_records_the_jurisdiction_hop(db_session):
     ))
     db_session.commit()
     assert db_session.query(Escalation).one().to_level == "block"
+
+
+def test_deleting_a_complaint_cascades_to_its_children(db_session):
+    """Children are nullable=False, so without a cascade the delete fails."""
+    complaint = Complaint(
+        tracking_id="CIV-CASCADE1",
+        citizen_email="a@b.com",
+        description="Broken drain cover on the lane",
+    )
+    db_session.add(complaint)
+    db_session.flush()
+    db_session.add(ComplaintMedia(
+        complaint_id=complaint.id, file_path="uploads/x.jpg", media_type="image"
+    ))
+    db_session.add(WorkOrder(complaint_id=complaint.id))
+    db_session.commit()
+
+    db_session.delete(complaint)
+    db_session.commit()
+
+    assert db_session.query(ComplaintMedia).count() == 0
+    assert db_session.query(WorkOrder).count() == 0

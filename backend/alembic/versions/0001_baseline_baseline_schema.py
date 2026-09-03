@@ -2,7 +2,7 @@
 
 Revision ID: 0001_baseline
 Revises: 
-Create Date: 2026-09-03 11:11:19.841989
+Create Date: 2026-09-03 16:12:35.401930
 
 """
 from typing import Sequence, Union
@@ -156,7 +156,8 @@ def upgrade() -> None:
     sa.Column('password_hash', sa.String(length=255), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['tenant_id'], ['tenants.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('tenant_id', 'email', name='uq_users_tenant_email')
     )
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=False)
     op.create_table('agent_runs',

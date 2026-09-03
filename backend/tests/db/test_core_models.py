@@ -1,3 +1,6 @@
+import pytest
+from sqlalchemy.exc import IntegrityError
+
 from app.constants import Category
 from app.db.models.core import Contractor, Department, Tenant, User
 
@@ -69,3 +72,35 @@ def test_nullable_is_inferred_from_optional_annotations(db_session):
     assert Tenant.__table__.c.config.nullable is True
     assert Tenant.__table__.c.name.nullable is False
     assert Contractor.__table__.c.zone.nullable is True
+
+
+def test_duplicate_email_within_a_tenant_is_rejected(db_session):
+    tenant = Tenant(name="BMC")
+    db_session.add(tenant)
+    db_session.flush()
+
+    db_session.add(User(tenant_id=tenant.id, email="dup@b.com", name="A"))
+    db_session.add(User(tenant_id=tenant.id, email="dup@b.com", name="B"))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+def test_same_email_is_allowed_across_different_tenants(db_session):
+    tenant_a = Tenant(name="BMC")
+    tenant_b = Tenant(name="Pune Municipal Corporation")
+    db_session.add_all([tenant_a, tenant_b])
+    db_session.flush()
+
+    db_session.add(User(tenant_id=tenant_a.id, email="shared@b.com", name="A"))
+    db_session.add(User(tenant_id=tenant_b.id, email="shared@b.com", name="B"))
+    db_session.commit()
+
+    assert db_session.query(User).count() == 2
+
+
+def test_foreign_keys_are_enforced(db_session):
+    """SQLite defaults PRAGMA foreign_keys to OFF; we turn it on at connect."""
+    from app.db.models.workflow import WorkOrder
+    db_session.add(WorkOrder(complaint_id="does-not-exist"))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
