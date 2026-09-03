@@ -65,7 +65,38 @@ Every value an LLM produces gets a Pydantic model with real constraints. This is
   - `RetrievedChunk(source: str, chunk_id: str | None, score: float | None, snippet: str)`
   - `band_for_score(score: int) -> RiskLevel`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Install the Phase 1 dependency stack**
+
+Every later task imports from these, so they go in first rather than mid-plan.
+All versions are verified to install and run on Python 3.14.
+
+```bash
+cd backend
+cat >> requirements.txt <<'REQEOF'
+
+# ── AI (Phase 1) ───────────────────────────────────
+langchain==1.3.18
+langchain-core==1.6.1
+langgraph==1.2.11
+langchain-google-genai==4.4.0
+langgraph-checkpoint-sqlite==3.1.1
+aiosqlite==0.22.1
+langsmith==0.12.1
+REQEOF
+.venv/bin/pip install -q -r requirements.txt
+.venv/bin/python -c "import langchain, langgraph, langchain_google_genai; print('installed')"
+```
+
+Confirm Phase 0 still passes with the new packages present:
+
+```bash
+cd backend && .venv/bin/python -m pytest -q
+```
+
+Expected: 51 passed. If anything broke, stop and report — a dependency conflict
+must not be papered over.
+
+- [ ] **Step 2: Write the failing test**
 
 ```bash
 mkdir -p backend/app/ai backend/tests/ai
@@ -168,12 +199,12 @@ def test_the_remaining_models_construct_with_minimal_input():
     assert RetrievedChunk(source="sop_roads.md").score is None
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 3: Run the test to verify it fails**
 
 Run: `cd backend && .venv/bin/python -m pytest tests/ai/test_schemas.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.ai.schemas'`
 
-- [ ] **Step 3: Implement the schemas**
+- [ ] **Step 4: Implement the schemas**
 
 `backend/app/ai/schemas.py`:
 
@@ -310,16 +341,16 @@ class RetrievedChunk(BaseModel):
     snippet: str = ""
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [ ] **Step 5: Run the test to verify it passes**
 
 Run: `cd backend && .venv/bin/python -m pytest tests/ai/test_schemas.py -v`
 Expected: PASS, 19 tests (11 plain + 8 from the parametrized boundary test).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 cd /home/martin/Projects/CivicAi
-git add backend/app/ai backend/tests/ai
+git add backend/requirements.txt backend/app/ai backend/tests/ai
 git commit -m "feat: add typed AI output schemas
 
 Constraints are enforced at generation time via with_structured_output rather
@@ -598,26 +629,7 @@ The only module in the codebase that constructs a chat model or calls `.with_str
   - `app.ai.llm.build_structured(task: Task, schema: type[BaseModel], prompt_name: str, prompt_version: str | None = None) -> Runnable`
   - `app.ai.llm.SHARED_RATE_LIMITER: InMemoryRateLimiter`
 
-- [ ] **Step 1: Add the dependencies**
-
-```bash
-cd backend
-cat >> requirements.txt <<'EOF'
-
-# ── AI (Phase 1) ───────────────────────────────────
-langchain==1.3.18
-langchain-core==1.6.1
-langgraph==1.2.11
-langchain-google-genai==4.4.0
-langgraph-checkpoint-sqlite==3.1.1
-aiosqlite==0.22.1
-langsmith==0.12.1
-EOF
-.venv/bin/pip install -q -r requirements.txt
-.venv/bin/python -c "import langchain, langgraph, langchain_google_genai; print('installed')"
-```
-
-- [ ] **Step 2: Add the new settings**
+- [ ] **Step 1: Add the new settings**
 
 In `backend/app/config.py`, extend the LLM provider block:
 
@@ -635,7 +647,7 @@ In `backend/app/config.py`, extend the LLM provider block:
     llm_max_retries: int = 3
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [ ] **Step 2: Write the failing test**
 
 `backend/tests/ai/test_llm.py`:
 
@@ -716,12 +728,12 @@ def test_fake_models_cannot_do_structured_output():
         fake.with_structured_output(ClassificationResult)
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [ ] **Step 3: Run the test to verify it fails**
 
 Run: `cd backend && .venv/bin/python -m pytest tests/ai/test_llm.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.ai.llm'`
 
-- [ ] **Step 5: Implement the LLM layer**
+- [ ] **Step 4: Implement the LLM layer**
 
 `backend/app/ai/llm.py`:
 
@@ -841,14 +853,14 @@ def build_structured(
     return get_prompt(prompt_name, prompt_version) | model.with_structured_output(schema)
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [ ] **Step 5: Run the test to verify it passes**
 
 Run: `cd backend && .venv/bin/python -m pytest tests/ai/test_llm.py -v`
 Expected: PASS, 9 tests.
 
 If `langchain_ollama` is not installed, `_build_one("ollama", ...)` raises `ImportError` at call time. That is acceptable — no test constructs an Ollama model, and Ollama is opt-in via `OLLAMA_ENABLED`. Do **not** add `langchain-ollama` to requirements in this task; it arrives with the Ollama work.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 cd /home/martin/Projects/CivicAi
@@ -886,7 +898,6 @@ could not be unit-tested without a network call."
 
 ```python
 import operator
-import typing
 from typing import Annotated, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel
