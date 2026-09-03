@@ -32,7 +32,7 @@ Non-goal: real government API integration. Contractor and officer data stay mock
 | Rewrite strategy | Greenfield backend; v1 deleted | Clean architecture matters more than preserving working-but-tangled code. v1 survives in git history and in `docs/01-legacy-system-explained.md`. Its ~30-line keyword classifier is the one thing ported forward, into `evals/baseline.py`, so every metric has a before/after column. |
 | Orchestration | LangGraph `StateGraph` | Typed state, conditional edges, durable checkpoints, native tracing. |
 | Agent architecture | Hybrid (deterministic spine + scoped agentic loops) | SLA decisions must be reproducible and auditable; LLM-driven control flow is reserved for open-ended retrieval and conversation. |
-| Relational store | SQLite | Zero-setup local dev. Postgres remains a config change. |
+| Relational store | SQLite | Zero-setup local dev. Postgres is a later change, not a config flip: no driver is installed and the code has not been exercised against it. |
 | Vector store | FAISS (`IndexFlatIP`) | No torch dependency, cp314 wheels available, corpus small enough that post-filtering is acceptable. |
 | Embeddings | Gemini `gemini-embedding-001` @ 768d, Ollama `nomic-embed-text` fallback | Free tier; no 2 GB local model download. |
 | LLM | Gemini `2.5-flash-lite` primary, Ollama local fallback | Free tier; fallback keeps the system alive under rate limits. |
