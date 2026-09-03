@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,7 +11,7 @@ class Settings(BaseSettings):
     # "development" | "staging" | "production". Guards dev-only endpoints.
     # Defaults to production so an unconfigured deployment fails CLOSED; local
     # development opts in explicitly via ENVIRONMENT=development in .env.
-    environment: str = "production"
+    environment: Literal["development", "staging", "production"] = "production"
 
     # ── Database ──────────────────────────────────────────────
     database_url: str = "sqlite:///./civicai.db"
