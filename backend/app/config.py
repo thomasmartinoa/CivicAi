@@ -24,11 +24,17 @@ class Settings(BaseSettings):
     seed_admin_password: str = "admin123"
     seed_officer_password: str = "officer123"
 
-    # ── LLM providers (used from Phase 1 onward) ──────────────
+    # ── LLM providers ─────────────────────────────────────────
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash-lite"
+    gemini_model_strong: str = "gemini-2.5-flash"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
+    ollama_enabled: bool = False
+    # Requests per second ceiling shared by every task. The Gemini free tier
+    # rate-limits aggressively and a 100-item eval sweep will hit it.
+    llm_requests_per_second: float = 0.5
+    llm_max_retries: int = 3
 
     # ── Email ─────────────────────────────────────────────────
     smtp_host: str = "localhost"
