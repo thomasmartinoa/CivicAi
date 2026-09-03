@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 import app.db.models  # noqa: F401 — registers every model on Base.metadata
+import app.db.session  # noqa: F401 — registers the PRAGMA foreign_keys=ON listener
 
 
 @pytest.fixture
