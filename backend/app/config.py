@@ -6,6 +6,9 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # "development" | "staging" | "production". Guards dev-only endpoints.
+    environment: str = "development"
+
     # ── Database ──────────────────────────────────────────────
     database_url: str = "sqlite:///./civicai.db"
 
@@ -14,6 +17,8 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 480
     otp_expire_minutes: int = 10
+    seed_admin_password: str = "admin123"
+    seed_officer_password: str = "officer123"
 
     # ── LLM providers (used from Phase 1 onward) ──────────────
     gemini_api_key: str | None = None

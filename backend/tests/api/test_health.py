@@ -18,3 +18,9 @@ def test_health_reports_a_version():
 def test_uploads_are_mounted():
     """A missing file must 404 from the static mount, not 500 or route-miss."""
     assert client.get("/uploads/definitely-not-here.jpg").status_code == 404
+
+
+def test_seed_is_refused_outside_development(monkeypatch):
+    from app.api import system
+    monkeypatch.setattr(system.settings, "environment", "production")
+    assert client.post("/admin/seed").status_code == 404

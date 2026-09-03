@@ -8,6 +8,7 @@ left CONSTRUCTION and SEWAGE pointing at departments that were never created.
 import bcrypt
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.constants import CATEGORY_DEPARTMENT, Category
 from app.db.models.core import Contractor, Department, Tenant, User
 
@@ -63,7 +64,7 @@ def seed_database(db: Session) -> dict:
 
     db.add(User(
         tenant_id=tenant.id, email="admin@civicai.gov", name="System Admin",
-        role="admin", password_hash=_hash("admin123"),
+        role="admin", password_hash=_hash(settings.seed_admin_password),
     ))
 
     for dept_name, categories in _departments_from_constants().items():
@@ -71,7 +72,7 @@ def seed_database(db: Session) -> dict:
         officer = User(
             tenant_id=tenant.id,
             email=f"{officer_name.lower().replace(' ', '.')}@civicai.gov",
-            name=officer_name, role="officer", password_hash=_hash("officer123"),
+            name=officer_name, role="officer", password_hash=_hash(settings.seed_officer_password),
         )
         db.add(officer)
         db.flush()

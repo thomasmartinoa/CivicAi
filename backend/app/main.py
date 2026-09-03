@@ -13,7 +13,7 @@ UPLOADS_DIR = BASE_DIR / "uploads"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    # Empty for now beyond startup/shutdown wiring — Phase 1 adds the scheduler here.
     yield
 
 
