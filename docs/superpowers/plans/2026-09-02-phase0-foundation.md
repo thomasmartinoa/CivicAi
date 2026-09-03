@@ -1892,3 +1892,42 @@ and that app/api reaches the graph only through the runner."
 - [ ] `backend/app/` contains no v1 code except `app/evals/baseline.py`
 
 **Next:** Phase 1 (graph core) gets its own plan, written once Phase 0 is complete.
+
+---
+
+## Carried forward into Phase 1
+
+Findings raised during Phase 0's reviews that were deliberately deferred rather than
+fixed. None blocks merge; all were judged cheaper to do alongside Phase 1's work.
+
+**Testing**
+- No pytest asserts the *200* path of `POST /admin/seed` — only the gated 404 path.
+  Writing it properly needs a `get_db` dependency override against a temp database,
+  which is the API test fixture Phase 1 has to build anyway.
+- `DailyBriefing` has no test coverage. It is a column bag with no relationships or
+  invariants; cover it when the briefing chain is built.
+- `app/db/session.py`'s exports have no direct test; they are exercised through the
+  API tests.
+
+**Schema**
+- `AgentRun` and `Notification` carry `complaint_id` with no back-reference
+  relationship, while `ComplaintMedia` and `Escalation` have theirs. The trace viewer
+  will want `complaint.agent_runs` and `complaint.notifications`.
+- `WorkOrder.complaint_id` is `unique=True`, enforcing 1:1 with `Complaint`. Phase 2's
+  cluster detection must therefore attach a grouped work order to a complaint that
+  does not already have one, or model clusters as their own entity. The constraint
+  will fail loudly rather than silently duplicating — that is deliberate.
+
+**Architecture guard**
+- `tests/test_import_rules.py` scans only `app/api/` and blocks only `app.ai.graph.*`.
+  If the real invariant is "only the runner crosses the boundary", widen the scan to
+  every package outside `app/ai/`.
+
+**Housekeeping**
+- `CLAUDE.md` still describes v1 throughout — deleted modules, a removed
+  `LLM_PROVIDER` setting, and a `POST /admin/seed` call that now 404s without
+  `ENVIRONMENT=development`. A staleness banner was added; the full rewrite is Phase 6.
+- `alembic.ini` still hardcodes a stale Postgres DSN. It is inert (overridden at
+  `env.py` module level) but should go when Postgres support is real.
+- Full-suite runtime is ~25s, almost entirely the two `alembic` subprocesses in
+  `tests/db/test_migrations.py`. Acceptable for what they prove; revisit if it grows.
