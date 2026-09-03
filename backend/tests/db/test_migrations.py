@@ -36,3 +36,22 @@ def test_migration_creates_every_table(tmp_path):
 
     missing = EXPECTED_TABLES - actual
     assert not missing, f"migration did not create: {sorted(missing)}"
+
+
+def test_models_have_not_drifted_from_the_migration(tmp_path):
+    """Guards the gap between conftest's create_all and the app's migrations."""
+    db_file = tmp_path / "drift.db"
+    env = {**os.environ, "DATABASE_URL": f"sqlite:///{db_file}"}
+    upgrade = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=BACKEND, env=env, capture_output=True, text=True,
+    )
+    assert upgrade.returncode == 0, upgrade.stderr
+    check = subprocess.run(
+        [sys.executable, "-m", "alembic", "check"],
+        cwd=BACKEND, env=env, capture_output=True, text=True,
+    )
+    assert check.returncode == 0, (
+        f"models have drifted from the migration; run "
+        f"`alembic revision --autogenerate`:\n{check.stdout}{check.stderr}"
+    )
