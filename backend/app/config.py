@@ -7,7 +7,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # "development" | "staging" | "production". Guards dev-only endpoints.
-    environment: str = "development"
+    # Defaults to production so an unconfigured deployment fails CLOSED; local
+    # development opts in explicitly via ENVIRONMENT=development in .env.
+    environment: str = "production"
 
     # ── Database ──────────────────────────────────────────────
     database_url: str = "sqlite:///./civicai.db"

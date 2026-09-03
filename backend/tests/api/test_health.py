@@ -24,3 +24,10 @@ def test_seed_is_refused_outside_development(monkeypatch):
     from app.api import system
     monkeypatch.setattr(system.settings, "environment", "production")
     assert client.post("/admin/seed").status_code == 404
+
+
+def test_seed_defaults_to_refused_when_unconfigured():
+    """The environment default must fail closed: an unconfigured deployment
+    gets no unauthenticated seed endpoint."""
+    from app.config import Settings
+    assert Settings(_env_file=None).environment == "production"
