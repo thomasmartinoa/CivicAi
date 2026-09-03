@@ -1866,7 +1866,7 @@ Expected: `{"status":"ok","version":"2.0.0-phase0"}` then `{"message":"Database 
 - [ ] **Step 7: Run the full suite and commit**
 
 Run: `cd backend && python -m pytest -v`
-Expected: PASS, 42 tests (config 5, baseline 6, core models 7, complaint models 8, AI models 5, seed 5, migration 1, health 3, import rules 2).
+Expected: PASS, 45 tests. Security and boundary fixes during review added three more: a fail-closed environment default, a seed-endpoint refusal test, and a detector test for the import-rule guard.
 
 ```bash
 cd /home/martin/Projects/CivicAi
@@ -1884,7 +1884,7 @@ and that app/api reaches the graph only through the runner."
 
 ## Phase 0 Done When
 
-- [ ] `cd backend && python -m pytest` passes with 42 tests and no network access
+- [ ] `cd backend && python -m pytest` passes with 45 tests and no network access
 - [ ] `python -m alembic upgrade head` creates all 17 tables from scratch
 - [ ] `uvicorn app.main:app` boots; `GET /health` returns `{"status": "ok", ...}`
 - [ ] `POST /admin/seed` populates a tenant, admin, 10 departments and 9 contractors, and is idempotent
