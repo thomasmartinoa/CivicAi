@@ -31,7 +31,9 @@ def get_prompt(name: str, version: str | None = None) -> ChatPromptTemplate:
     """Fetch a registered prompt, defaulting to the version in LATEST."""
     if name not in LATEST:
         raise KeyError(f"unknown prompt {name!r}; registered: {sorted(LATEST)}")
-    resolved = version or LATEST[name]
+    # `is None`, not `or`: an explicit empty string is a caller mistake and
+    # must raise, not silently resolve to the default version.
+    resolved = LATEST[name] if version is None else version
     try:
         return PROMPT_REGISTRY[(name, resolved)]
     except KeyError:
