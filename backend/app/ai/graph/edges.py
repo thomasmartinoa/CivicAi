@@ -29,3 +29,11 @@ def after_classify(state: ComplaintState) -> str:
     if state["errors"] or state["classification"] is None:
         return END
     return "assess_risk"
+
+
+def after_assess_risk(state: ComplaintState) -> str:
+    """Fail closed: work_order reads state["risk"] unconditionally, so a failed
+    assessment must not reach it."""
+    if state["errors"] or state["risk"] is None:
+        return END
+    return "route"

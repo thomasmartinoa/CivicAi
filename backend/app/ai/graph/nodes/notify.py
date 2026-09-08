@@ -13,10 +13,18 @@ from app.ai.graph.state import ComplaintState
 from app.ai.schemas import NodeDecision
 
 NODE = "notify"
+# The exact summary a successful send writes. The guard below matches on this
+# constant, not on a prefix or a substring: a failed attempt also logs a
+# `notify` entry, and treating that as "already sent" would suppress the retry
+# and lose the notification entirely.
+SENT_SUMMARY = "citizen notified"
 
 
 def _already_sent(state: ComplaintState) -> bool:
-    return any(entry.node == NODE for entry in state["decision_log"])
+    return any(
+        entry.node == NODE and entry.summary == SENT_SUMMARY
+        for entry in state["decision_log"]
+    )
 
 
 def notify_node(state: ComplaintState, config: RunnableConfig) -> dict:
@@ -40,4 +48,4 @@ def notify_node(state: ComplaintState, config: RunnableConfig) -> dict:
             "decision_log": [NodeDecision(node=NODE, summary=f"failed: {exc}")],
         }
 
-    return {"decision_log": [NodeDecision(node=NODE, summary="citizen notified")]}
+    return {"decision_log": [NodeDecision(node=NODE, summary=SENT_SUMMARY)]}

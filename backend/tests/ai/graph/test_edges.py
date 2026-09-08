@@ -32,3 +32,13 @@ def test_missing_validation_ends_rather_than_continuing():
 
 def test_the_confidence_threshold_is_a_named_constant():
     assert 0.0 < CONFIDENCE_THRESHOLD < 1.0
+
+
+def test_a_failed_risk_assessment_does_not_reach_the_work_order():
+    from app.ai.graph.edges import after_assess_risk
+    from app.ai.schemas import RiskAssessment
+    from app.constants import RiskLevel
+
+    assert after_assess_risk(_state(risk=RiskAssessment(priority_score=50, risk_level=RiskLevel.MEDIUM))) == "route"
+    assert after_assess_risk(_state()) == END
+    assert after_assess_risk(_state(errors=["assess_risk: 503"])) == END
