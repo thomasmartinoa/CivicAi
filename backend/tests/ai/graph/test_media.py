@@ -18,9 +18,24 @@ def test_an_image_becomes_a_media_insight(make_config):
     assert insight.media_type == "image"
 
 
-def test_the_node_supplies_path_and_type_not_the_model(make_config):
-    """The chain is invoked with file_path only; media_type is the node's business,
-    not the model's. The node still supplies both into the final MediaInsight."""
+def test_the_insight_takes_path_and_type_from_the_node_not_the_model(make_config):
+    """VisionObservation has no file_path or media_type field, so those can only
+    come from the node. The model cannot invent a path it was never asked for."""
+    obs = VisionObservation(text="a pothole", shows_infrastructure_problem=True)
+    update = analyse_media_node(_payload("uploads/real.jpg", "image"),
+                                make_config(vision_chain=returns(obs)))
+
+    assert "file_path" not in VisionObservation.model_fields
+    assert "media_type" not in VisionObservation.model_fields
+    assert update["media_insights"][0].file_path == "uploads/real.jpg"
+    assert update["media_insights"][0].media_type == "image"
+
+
+def test_the_chain_is_invoked_with_the_file_path(make_config):
+    """The node's contract with its chain is {"file_path": str}. Turning that into
+    the vision prompt's image_url/image_context is the adapter's job, wired in
+    build_deps. Keeping file loading out of the node is what makes the node
+    testable without touching disk."""
     seen = {}
 
     def capture(payload):
@@ -30,7 +45,7 @@ def test_the_node_supplies_path_and_type_not_the_model(make_config):
     from langchain_core.runnables import RunnableLambda
 
     analyse_media_node(_payload(), make_config(vision_chain=RunnableLambda(capture)))
-    assert "media_type" not in seen
+    assert set(seen) == {"file_path"}
 
 
 def test_an_image_with_no_problem_produces_no_insight(make_config):
