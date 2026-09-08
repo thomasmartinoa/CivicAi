@@ -116,3 +116,33 @@ def test_parallel_writes_merge_instead_of_colliding():
     assert {i.file_path for i in result["media_insights"]} == {
         "uploads/0.jpg", "uploads/1.jpg", "uploads/2.jpg"
     }
+
+
+def test_allowlist_covers_every_enum_reachable_from_a_schema_field():
+    """Enums inside models must be allowlisted too.
+
+    A missing one does not raise: a bare enum deserializes back as a plain str,
+    so `value is Category.ROADS` silently becomes False.
+    """
+    import enum
+    import typing
+
+    reachable: set[type] = set()
+    for model in (m for m in CHECKPOINT_ALLOWLIST if hasattr(m, "model_fields")):
+        for field in model.model_fields.values():
+            for arg in (field.annotation, *typing.get_args(field.annotation)):
+                if isinstance(arg, type) and issubclass(arg, enum.Enum):
+                    reachable.add(arg)
+
+    assert reachable, "expected to find at least one enum in the schemas"
+    missing = reachable - set(CHECKPOINT_ALLOWLIST)
+    assert not missing, f"enums not in CHECKPOINT_ALLOWLIST: {sorted(e.__name__ for e in missing)}"
+
+
+def test_a_bare_enum_round_trips_as_the_enum_not_a_string():
+    """Regression guard for the failure mode above."""
+    from app.constants import Category
+
+    serde = build_serializer()
+    restored = serde.loads_typed(serde.dumps_typed(Category.ROADS))
+    assert restored is Category.ROADS, f"degraded to {type(restored).__name__}: {restored!r}"

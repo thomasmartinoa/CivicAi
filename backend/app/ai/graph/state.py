@@ -22,6 +22,7 @@ from app.ai.schemas import (
     NodeDecision, RetrievedChunk, RiskAssessment, RoutingDecision,
     ValidationResult, WorkOrderDraft,
 )
+from app.constants import Category, RiskLevel
 
 
 class ComplaintState(TypedDict):
@@ -55,13 +56,16 @@ class ComplaintState(TypedDict):
     terminal_reason: str | None
 
 
-# Every Pydantic class reachable from ComplaintState. Pass the classes
+# Every Pydantic class and enum reachable from ComplaintState. Pass the classes
 # themselves: a ("module",) tuple silently allows nothing, and the symptom is a
-# dict where a model should be.
+# dict where a model should be. Enums must be listed too; a missing enum degrades
+# to a plain string rather than raising, so state["classification"].category is
+# then False if compared with is.
 CHECKPOINT_ALLOWLIST: list[type] = [
     ClassificationResult, Coords, LocationInfo, MediaInsight, MediaRef,
     NodeDecision, RetrievedChunk, RiskAssessment, RoutingDecision,
     ValidationResult, WorkOrderDraft,
+    Category, RiskLevel,
 ]
 
 
