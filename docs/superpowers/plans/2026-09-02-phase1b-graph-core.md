@@ -1529,6 +1529,8 @@ The only entry point into the graph. Owns the checkpointer, injects dependencies
 `backend/tests/ai/graph/test_runner.py`:
 
 ```python
+from dataclasses import replace
+
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -1625,8 +1627,10 @@ async def test_a_rejected_complaint_gets_no_work_order(env):
 async def test_a_technical_failure_is_distinct_from_a_rejection(env):
     """An outage and a business decision must not look the same afterwards."""
     session, complaint = env
-    deps = _deps(session_factory=lambda: session)
-    deps = GraphDeps(**{**deps.__dict__, "classify_chain": raises(RuntimeError("503 from provider"))})
+    deps = replace(
+        _deps(session_factory=lambda: session),
+        classify_chain=raises(RuntimeError("503 from provider")),
+    )
     await _run(session, complaint, deps)
 
     session.expire_all()
