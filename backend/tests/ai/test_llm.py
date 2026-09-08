@@ -1,7 +1,9 @@
+import sys
+
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import Runnable, RunnableLambda
 
 from app.ai import llm as llm_module
 from app.ai.llm import (
@@ -9,6 +11,7 @@ from app.ai.llm import (
     available_providers, build_chat_model, build_structured,
 )
 from app.ai.schemas import ClassificationResult
+from app.constants import Category
 
 
 def test_every_task_has_a_model_tier():
@@ -48,23 +51,43 @@ def test_ollama_alone_is_usable(monkeypatch):
     assert available_providers() == ["ollama"]
 
 
+def test_ollama_enabled_without_the_package_raises_no_model_configured(monkeypatch):
+    """langchain-ollama is deliberately not in requirements.txt.
+    available_providers() reports ollama as available without checking the
+    package exists, so the ImportError must be caught and turned into an
+    actionable NoModelConfigured rather than leaking out raw."""
+    monkeypatch.setattr(llm_module.settings, "gemini_api_key", None)
+    monkeypatch.setattr(llm_module.settings, "ollama_enabled", True)
+    monkeypatch.setitem(sys.modules, "langchain_ollama", None)  # forces ImportError
+    with pytest.raises(NoModelConfigured, match="langchain-ollama"):
+        build_chat_model(Task.CLASSIFY)
+
+
 def test_rate_limiter_is_shared_across_tasks():
     """One ceiling for the whole process, not one per model instance."""
     assert SHARED_RATE_LIMITER is llm_module.SHARED_RATE_LIMITER
 
 
-def test_build_structured_accepts_an_injected_model(monkeypatch):
-    """The seam that makes nodes testable.
+class _StubModel(GenericFakeChatModel):
+    def with_structured_output(self, schema, **kwargs) -> Runnable:
+        return RunnableLambda(lambda _: ClassificationResult(category="ROADS", confidence=0.5))
 
-    LangChain's fake chat models raise NotImplementedError on
-    with_structured_output, so tests inject an already-structured runnable
-    instead of a raw model.
+
+def test_build_structured_composes_prompt_model_and_fallbacks(monkeypatch):
+    """Exercises the RunnableWithFallbacks.__getattr__ proxy for with_structured_output.
+
+    The explicit `-> Runnable` return annotation on the stub above is load-bearing:
+    the proxy resolves type hints, and an unresolvable annotation makes it fail.
     """
-    stub = RunnableLambda(
-        lambda _: ClassificationResult(category="ROADS", confidence=0.88)
+    monkeypatch.setattr(llm_module.settings, "gemini_api_key", "x")
+    monkeypatch.setattr(llm_module.settings, "ollama_enabled", True)
+    monkeypatch.setattr(
+        llm_module, "_build_one",
+        lambda provider, task: _StubModel(messages=iter([AIMessage(content="{}")])),
     )
-    result = stub.invoke({"description": "pothole", "media_context": ""})
-    assert result.category == "ROADS"
+    chain = build_structured(Task.CLASSIFY, ClassificationResult, "classify")
+    result = chain.invoke({"description": "pothole", "media_context": ""})
+    assert result.category is Category.ROADS
 
 
 def test_fake_models_cannot_do_structured_output():
