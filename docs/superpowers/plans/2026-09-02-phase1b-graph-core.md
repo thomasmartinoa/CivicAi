@@ -592,8 +592,24 @@ def test_an_image_becomes_a_media_insight(make_config):
     assert insight.media_type == "image"
 
 
-def test_the_node_supplies_path_and_type_not_the_model(make_config):
-    """The model never sees the file path, so it cannot invent one."""
+def test_the_insight_takes_path_and_type_from_the_node_not_the_model(make_config):
+    """VisionObservation has no file_path or media_type field, so those can only
+    come from the node. The model cannot invent a path it was never asked for."""
+    obs = VisionObservation(text="a pothole", shows_infrastructure_problem=True)
+    update = analyse_media_node(_payload("uploads/real.jpg", "image"),
+                                make_config(vision_chain=returns(obs)))
+
+    assert "file_path" not in VisionObservation.model_fields
+    assert "media_type" not in VisionObservation.model_fields
+    assert update["media_insights"][0].file_path == "uploads/real.jpg"
+    assert update["media_insights"][0].media_type == "image"
+
+
+def test_the_chain_is_invoked_with_the_file_path(make_config):
+    """The node's contract with its chain is {"file_path": str}. Turning that into
+    the vision prompt's image_url/image_context is the adapter's job, wired in
+    build_deps — see Task 5. Keeping file loading out of the node is what makes
+    the node testable without touching disk."""
     seen = {}
 
     def capture(payload):
@@ -603,7 +619,7 @@ def test_the_node_supplies_path_and_type_not_the_model(make_config):
     from langchain_core.runnables import RunnableLambda
 
     analyse_media_node(_payload(), make_config(vision_chain=RunnableLambda(capture)))
-    assert "file_path" not in seen
+    assert set(seen) == {"file_path"}
 
 
 def test_an_image_with_no_problem_produces_no_insight(make_config):
@@ -806,12 +822,12 @@ Note the vision chain is invoked with `{"file_path": ...}` only. Loading the ima
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd backend && .venv/bin/python -m pytest tests/ai/graph -v`
-Expected: PASS, 24 tests.
+Expected: PASS, 25 tests.
 
 - [ ] **Step 6: Run the full suite and commit**
 
 Run: `cd backend && .venv/bin/python -m pytest`
-Expected: PASS, 137 tests.
+Expected: PASS, 138 tests.
 
 ```bash
 cd /home/martin/Projects/CivicAi
@@ -1718,10 +1734,41 @@ def build_deps(session_factory: Callable) -> GraphDeps:
         validate_chain=build_structured(Task.VALIDATE, ValidationResult, "validate"),
         classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify"),
         risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk"),
-        vision_chain=build_structured(Task.VISION, VisionObservation, "vision"),
+        vision_chain=_vision_chain(),
         session_factory=session_factory,
         geocode=reverse_geocode,
         notify=notify_citizen,
+    )
+
+
+def _vision_chain():
+    """Adapt the media node's {"file_path"} contract to the vision prompt.
+
+    The prompt takes `image_url` and `image_context`; the node deliberately knows
+    nothing about loading files, so the bridge lives here. Reading bytes in the
+    node would make it untestable without a filesystem.
+    """
+    import base64
+    import mimetypes
+    from pathlib import Path
+
+    from langchain_core.runnables import RunnableLambda
+
+    from app.ai.llm import Task, build_structured
+    from app.ai.schemas import VisionObservation
+    from app.config import settings
+
+    def to_prompt_vars(payload: dict) -> dict:
+        path = Path(settings.upload_dir).parent / payload["file_path"]
+        mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        return {
+            "image_url": f"data:{mime};base64,{encoded}",
+            "image_context": "Describe any infrastructure problem visible in this photograph.",
+        }
+
+    return RunnableLambda(to_prompt_vars) | build_structured(
+        Task.VISION, VisionObservation, "vision"
     )
 
 
