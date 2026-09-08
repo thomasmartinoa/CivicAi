@@ -1208,3 +1208,50 @@ so a test asserts the allowlist covers app.ai.schemas exhaustively."
 - [ ] `CHECKPOINT_ALLOWLIST` covers every model in `app/ai/schemas.py`, enforced by a test
 
 **Next:** Phase 1b — nodes, media subgraph, graph assembly, checkpointer, runner, API wiring, streaming and observability.
+
+---
+
+## Carried forward into Phase 1b
+
+Most findings raised during Phase 1a's reviews were fixed in the final wave. These
+are the ones deliberately left open.
+
+**Accepted as-is, documented in code**
+- `TASK_MODEL` and `SHARED_RATE_LIMITER` snapshot `settings` at import, unlike
+  `available_providers()` which reads fresh per call. So `monkeypatch.setattr(settings,
+  "gemini_model", ...)` silently does nothing while the same pattern works elsewhere.
+  Settings come from `.env` before process start, so this is correct in practice; an
+  eval sweep must mutate `TASK_MODEL` directly. Commented at the definition.
+- `ChatGoogleGenerativeAI` is constructed with `max_retries`; `ChatOllama` is not.
+  Believed to be an API difference rather than an omission — confirm when the Ollama
+  work lands and `langchain-ollama` is actually installed.
+
+**Needs an empirical check before the live demo**
+- `llm_requests_per_second = 0.5` was chosen without measuring the current Gemini
+  free-tier RPM. If flash-lite is 15 RPM (0.25 rps), the default *exceeds* the limit
+  and does not do what its comment claims. Separately, the value is tuned for Phase 3's
+  eval sweep, not for a demo: one complaint through ~5 LLM nodes spends 10s+ in the
+  limiter alone, which will make the live WebSocket demo look broken. Consider making
+  it overridable per run. `max_bucket_size=5` also permits a burst above any per-minute
+  window. Client `max_retries=3` and the planned per-node `RetryPolicy(max_attempts=3)`
+  compound to as many as 9 calls for one node.
+
+**Design gaps Phase 1b must close**
+- There is no vision *output* schema. `Task.VISION` maps to the `vision` prompt, but
+  `MediaInsight` carries `file_path`/`media_type`, which the node knows and the model
+  does not. Phase 1b needs a small `VisionObservation(text, has_infrastructure_problem,
+  apparent_severity)` that the node maps into `MediaInsight`.
+- `errors: Annotated[list[str], operator.add]` has no node attribution, unlike
+  `RetrievedChunk` which now carries `node`. Decide a convention (e.g. `f"classify: {exc}"`)
+  and write it into the state docstring before nodes start appending.
+- `WorkOrderDraft.sla_deadline` was deliberately removed — the node computes
+  `utcnow() + timedelta(hours=sla_hours)`. Do not reintroduce it as a model output.
+
+**Evaluation-path concern for Phase 3**
+- `RiskAssessment`'s validators raise `ValidationError` on a self-contradictory model
+  response, so the node fails rather than producing a scoreable result. The eval harness
+  will not be able to distinguish "model self-contradicted" from "model errored".
+  Consider `include_raw=True` plus a repair step on the eval path.
+
+**Cosmetic**
+- Stray trailing blank line in `requirements.txt`.
