@@ -73,6 +73,16 @@ def test_risk_assessment_without_factors_is_still_accepted():
     assert assessment.category_severity == 0
 
 
+def test_explicit_zero_factors_still_must_match_the_score():
+    """`any(factors)` let this through: a model returning all zeros against a
+    non-zero priority_score is self-contradictory and must fail."""
+    with pytest.raises(ValidationError):
+        RiskAssessment(
+            priority_score=90, risk_level="critical",
+            category_severity=0, population_impact=0, safety_risk=0, urgency=0,
+        )
+
+
 def test_risk_level_must_match_the_score_band():
     """A model that returns score=90 with risk_level='low' is self-contradictory."""
     with pytest.raises(ValidationError):

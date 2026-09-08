@@ -89,9 +89,15 @@ class RiskAssessment(BaseModel):
         # The four factors default to 0, so a RiskAssessment constructed with
         # only priority_score and risk_level (as several existing tests do)
         # must not be forced to also supply factors that sum correctly. Only
-        # enforce the sum once at least one factor has actually been set.
-        factors = (self.category_severity, self.population_impact, self.safety_risk, self.urgency)
-        if any(factors):
+        # check the sum when the caller actually supplied factors.
+        # model_fields_set contains only explicitly-passed fields, so this
+        # skips the check for callers that omit them entirely (the model
+        # always sends all four) while still catching a model that returns
+        # explicit zeros against a non-zero score — which `any(factors)`
+        # would let through.
+        _FACTOR_FIELDS = {"category_severity", "population_impact", "safety_risk", "urgency"}
+        if self.model_fields_set & _FACTOR_FIELDS:
+            factors = (self.category_severity, self.population_impact, self.safety_risk, self.urgency)
             total = sum(factors)
             if total != self.priority_score:
                 raise ValueError(
