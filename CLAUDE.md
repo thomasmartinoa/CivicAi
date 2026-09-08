@@ -1,5 +1,11 @@
 # CLAUDE.md
 
+> **⚠️ This file describes CivicAI v1, which was deleted in the Phase 0 rewrite.**
+> It is stale and should not be trusted for architecture, file paths, settings, or
+> API surface. See `docs/superpowers/specs/2026-09-02-civicai-v2-design.md` for the
+> current design and `docs/01-legacy-system-explained.md` for what v1 was.
+> A full rewrite of this file is scheduled for Phase 6.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview

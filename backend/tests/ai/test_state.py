@@ -24,9 +24,16 @@ def test_accumulating_fields_have_reducers():
 
 
 def test_scalar_fields_do_not_have_reducers():
-    """A reducer on a scalar would concatenate instead of replace."""
+    """A reducer on a scalar would concatenate instead of replace.
+
+    Derived as "every ComplaintState key minus the accumulating ones" rather
+    than a hand-picked sample, so it stays correct as Phase 1b adds keys
+    instead of silently exercising only the fields it happened to name.
+    """
     hints = get_type_hints(ComplaintState, include_extras=True)
-    for field in ("description", "classification", "risk", "terminal_reason"):
+    scalar_fields = set(hints) - set(ACCUMULATING)
+    assert scalar_fields, "expected at least one scalar field"
+    for field in scalar_fields:
         assert get_origin(hints[field]) is not Annotated, f"{field} should not have a reducer"
 
 
@@ -118,21 +125,41 @@ def test_parallel_writes_merge_instead_of_colliding():
     }
 
 
-def test_allowlist_covers_every_enum_reachable_from_a_schema_field():
-    """Enums inside models must be allowlisted too.
+def _enums_in(annotation, _seen=None) -> set[type]:
+    """Recursively find every enum type reachable from a type annotation.
 
-    A missing one does not raise: a bare enum deserializes back as a plain str,
-    so `value is Category.ROADS` silently becomes False.
+    A flat, one-level unwrap (checking only `get_args(annotation)` itself)
+    misses a field shaped `list[Category] | None`: the enum is nested two
+    levels deep (Optional -> list -> Category), which is exactly the shape a
+    future field might take.
     """
     import enum
     import typing
 
+    if _seen is None:
+        _seen = set()
+    if annotation in _seen:
+        return set()
+    _seen.add(annotation)
+
+    found: set[type] = set()
+    if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
+        found.add(annotation)
+    for arg in typing.get_args(annotation):
+        found |= _enums_in(arg, _seen)
+    return found
+
+
+def test_allowlist_covers_every_enum_reachable_from_a_schema_field():
+    """Enums inside models must be allowlisted too, however deeply nested.
+
+    A missing one does not raise: a bare enum deserializes back as a plain str,
+    so `value is Category.ROADS` silently becomes False.
+    """
     reachable: set[type] = set()
     for model in (m for m in CHECKPOINT_ALLOWLIST if hasattr(m, "model_fields")):
         for field in model.model_fields.values():
-            for arg in (field.annotation, *typing.get_args(field.annotation)):
-                if isinstance(arg, type) and issubclass(arg, enum.Enum):
-                    reachable.add(arg)
+            reachable |= _enums_in(field.annotation)
 
     assert reachable, "expected to find at least one enum in the schemas"
     missing = reachable - set(CHECKPOINT_ALLOWLIST)
