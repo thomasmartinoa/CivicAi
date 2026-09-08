@@ -388,7 +388,13 @@ prompt-injection defense.
 
 1. A complaint submitted through the API completes the LangGraph pipeline, and the run is inspectable
    in both LangSmith and the in-app trace viewer.
-2. Killing the process mid-run and restarting resumes from the last checkpoint rather than restarting.
+2. A run whose node raises resumes from the last checkpoint on re-invocation, without
+   re-running the nodes that already completed. **Measured limitation:** this holds when
+   the failure is an exception and the process exits normally (5 checkpoints / 9 writes
+   persisted in a 5-node probe). A `SIGKILL` mid-node persists only 1 checkpoint and 0
+   writes — SQLite has not committed the tail — and the run restarts from the beginning.
+   Both the sync and async SQLite savers behave this way. Nodes with external side
+   effects must therefore be idempotent rather than assuming exactly-once execution.
 3. Cost estimates, SLA windows and department routing derive from retrieved documents with citations;
    no hardcoded lookup dictionaries remain in the decision path.
 4. `python -m app.evals.run` produces a markdown report with all three comparison columns populated.
