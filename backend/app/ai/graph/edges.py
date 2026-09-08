@@ -21,3 +21,11 @@ def after_validate(state: ComplaintState) -> str:
     if validation is None or not validation.is_valid:
         return END
     return "classify"
+
+
+def after_classify(state: ComplaintState) -> str:
+    """Low confidence is recorded but does not branch until Phase 2 adds the
+    retrieval loop. Fails closed on a missing classification, as elsewhere."""
+    if state["errors"] or state["classification"] is None:
+        return END
+    return "assess_risk"
