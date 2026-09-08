@@ -55,6 +55,24 @@ class MediaInsight(BaseModel):
     text: str = Field(description="What the media shows or says, in plain text")
 
 
+class VisionObservation(BaseModel):
+    """What a vision model reports about one photograph.
+
+    Deliberately smaller than MediaInsight: the model is not told the file path
+    or media type, so it cannot hallucinate them. The node maps this into a
+    MediaInsight, supplying those itself.
+    """
+
+    text: str = Field(description="What infrastructure problem is visible, in one or two sentences")
+    shows_infrastructure_problem: bool = Field(
+        description="False if the image shows nothing a municipality would act on"
+    )
+    apparent_severity: str = Field(
+        default="unknown",
+        description="How severe the visible problem looks: minor, moderate, severe, or unknown",
+    )
+
+
 class ValidationResult(BaseModel):
     is_valid: bool = Field(description="Whether this report describes an infrastructure problem to act on")
     what_happened: str = Field(default="", description="One-sentence restatement of the reported problem")

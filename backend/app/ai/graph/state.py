@@ -20,7 +20,7 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from app.ai.schemas import (
     ClassificationResult, Coords, LocationInfo, MediaInsight, MediaRef,
     NodeDecision, RetrievedChunk, RiskAssessment, RoutingDecision,
-    ValidationResult, WorkOrderDraft,
+    ValidationResult, VisionObservation, WorkOrderDraft,
 )
 from app.constants import Category, JurisdictionLevel, RiskLevel
 
@@ -64,7 +64,7 @@ class ComplaintState(TypedDict):
 CHECKPOINT_ALLOWLIST: list[type] = [
     ClassificationResult, Coords, LocationInfo, MediaInsight, MediaRef,
     NodeDecision, RetrievedChunk, RiskAssessment, RoutingDecision,
-    ValidationResult, WorkOrderDraft,
+    ValidationResult, VisionObservation, WorkOrderDraft,
     Category, JurisdictionLevel, RiskLevel,
 ]
 
