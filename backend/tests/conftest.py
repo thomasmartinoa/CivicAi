@@ -19,3 +19,16 @@ def db_session():
     finally:
         session.close()
         engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _fast_password_hashing(monkeypatch):
+    """bcrypt is deliberately slow; seed_database hashes 11 passwords.
+
+    Tests care that a password is hashed, never how expensive the hash is, so
+    drop the cost factor to the minimum. Production hashing is untouched.
+    """
+    import bcrypt
+
+    real_gensalt = bcrypt.gensalt
+    monkeypatch.setattr(bcrypt, "gensalt", lambda rounds=4: real_gensalt(4))

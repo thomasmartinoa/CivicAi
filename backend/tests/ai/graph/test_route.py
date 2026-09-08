@@ -39,19 +39,19 @@ def test_every_category_resolves_to_a_real_department(make_config, base_state, s
         assert update["routing"].department_id is not None, f"{category} routed nowhere"
 
 
-def test_a_specialist_contractor_outranks_a_generalist(seeded):
+def test_a_specialist_contractor_outranks_a_generalist():
     specialist = Contractor(name="S", specializations=[Category.ROADS.value], rating=3.0)
     generalist = Contractor(name="G", specializations=[], rating=5.0)
     assert score_contractor(specialist, Category.ROADS, None) > score_contractor(generalist, Category.ROADS, None)
 
 
-def test_a_busy_contractor_is_penalised(seeded):
+def test_a_busy_contractor_is_penalised():
     idle = Contractor(name="I", specializations=[Category.ROADS.value], rating=4.0, active_workload=0)
     busy = Contractor(name="B", specializations=[Category.ROADS.value], rating=4.0, active_workload=8)
     assert score_contractor(idle, Category.ROADS, None) > score_contractor(busy, Category.ROADS, None)
 
 
-def test_zone_match_breaks_a_tie(seeded):
+def test_zone_match_breaks_a_tie():
     near = Contractor(name="N", specializations=[Category.ROADS.value], rating=4.0, zone="South Bangalore")
     far = Contractor(name="F", specializations=[Category.ROADS.value], rating=4.0, zone="North Bangalore")
     assert score_contractor(near, Category.ROADS, "south bangalore") > score_contractor(far, Category.ROADS, "south bangalore")
