@@ -831,10 +831,6 @@ boolean rather than v1's substring search on the model's prose."
 
 ## Task 3: The remaining nodes
 
-> **⚠️ Incomplete:** Step 3's implementation is specified in prose, not written out
-> as code. Expand it before executing this task — the tests above define the
-> contract precisely, but a plan step without its code is a plan defect.
-
 **Files:**
 - Create: `backend/app/ai/graph/nodes/assess_risk.py`, `route.py`, `work_order.py`, `notify.py`
 - Modify: `backend/app/ai/graph/edges.py`
@@ -1057,22 +1053,272 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'app.ai.graph.nodes.ass
 
 - [ ] **Step 3: Implement the four nodes**
 
-Write `assess_risk.py`, `route.py`, `work_order.py` and `notify.py` to satisfy the tests above, following the shape established in Tasks 1 and 2: fetch dependencies via `deps_from_config(config).require(...)`, wrap model and I/O calls in `try/except` appending to `errors`, and return a `NodeDecision` in `decision_log`.
+`backend/app/ai/graph/nodes/assess_risk.py`:
 
-Three specifics the tests pin and the implementation must honour:
+```python
+"""Score how urgently the municipality must act.
 
-**`route.py`** reads `Department.categories` to find the owning department — a `JSON` column queried with a Python-side filter over the tenant's departments, not a hardcoded map. Contractor scoring lives in one function, `score_contractor(contractor, category, district) -> float`, weighted: specialisation match 40, `rating * 6`, `max(0, 20 - workload * 2)`, zone match 10. v1 copy-pasted this scoring into three files; there is exactly one copy here.
+Unlike v1, where "risk" was a lookup keyed only on category — so a pothole
+outside a school gate and one on an empty service road both scored 60 — the
+model sees the specific report and the category together.
+"""
 
-**`work_order.py`** owns `SLA_HOURS: dict[RiskLevel, int]` (`CRITICAL: 4, HIGH: 24, MEDIUM: 72, LOW: 168`) and computes `sla_deadline` itself as `utcnow() + timedelta(hours=...)`. Cost and materials stay simple constants in this phase — Phase 2 replaces them with retrieval, which is the point of Phase 2.
+from langchain_core.runnables import RunnableConfig
 
-**`notify.py`** must be idempotent. Guard on a fact already in state — a `NodeDecision` with `node == "notify"` already present in `decision_log` means the notification went out. Return early without calling `notify` if so.
+from app.ai.graph.deps import deps_from_config
+from app.ai.graph.state import ComplaintState
+from app.ai.schemas import NodeDecision
 
-Add to `edges.py`:
+
+def _media_context(state: ComplaintState) -> str:
+    return "\n".join(f"[{i.media_type}] {i.text}" for i in state["media_insights"])
+
+
+def assess_risk_node(state: ComplaintState, config: RunnableConfig) -> dict:
+    chain = deps_from_config(config).require("risk_chain")
+    classification = state["classification"]
+
+    try:
+        result = chain.invoke({
+            "description": state["description"],
+            "category": classification.category.value,
+            "media_context": _media_context(state),
+        })
+    except Exception as exc:
+        return {
+            "errors": [f"assess_risk: {exc}"],
+            "decision_log": [NodeDecision(node="assess_risk", summary=f"failed: {exc}")],
+        }
+
+    return {
+        "risk": result,
+        "decision_log": [NodeDecision(
+            node="assess_risk",
+            summary=f"{result.risk_level.value} ({result.priority_score}/100)",
+        )],
+    }
+```
+
+`backend/app/ai/graph/nodes/route.py`:
+
+```python
+"""Pick the owning department and the best-placed contractor.
+
+Two v1 defects fixed structurally:
+
+- The department comes from `Department.categories`, the JSON column v1
+  declared, seeded, and then ignored in favour of a hardcoded dict that drifted
+  until CONSTRUCTION and SEWAGE pointed at departments that did not exist.
+- Contractor scoring lives here once. v1 copy-pasted the identical loop into
+  three files, so changing a weight meant remembering all three.
+"""
+
+from langchain_core.runnables import RunnableConfig
+
+from app.ai.graph.deps import deps_from_config
+from app.ai.graph.state import ComplaintState
+from app.constants import Category, JurisdictionLevel
+from app.ai.schemas import NodeDecision, RoutingDecision
+
+# Weights are deliberately explicit rather than tuned. Specialisation dominates,
+# then track record, then availability, then locality as a tie-breaker.
+SPECIALISATION_WEIGHT = 40.0
+RATING_WEIGHT = 6.0
+WORKLOAD_ALLOWANCE = 20.0
+WORKLOAD_PENALTY = 2.0
+ZONE_BONUS = 10.0
+
+
+def score_contractor(contractor, category: Category, district: str | None) -> float:
+    score = 0.0
+    if contractor.specializations and category.value in contractor.specializations:
+        score += SPECIALISATION_WEIGHT
+    score += (contractor.rating or 0.0) * RATING_WEIGHT
+    score += max(0.0, WORKLOAD_ALLOWANCE - (contractor.active_workload or 0) * WORKLOAD_PENALTY)
+    if district and contractor.zone and contractor.zone.lower() == district.lower():
+        score += ZONE_BONUS
+    return score
+
+
+def _jurisdiction(state: ComplaintState) -> JurisdictionLevel:
+    """The finest level we actually know, not the finest level that exists."""
+    location = state["location"]
+    if location is None:
+        return JurisdictionLevel.CITY
+    if location.ward:
+        return JurisdictionLevel.WARD
+    if location.block:
+        return JurisdictionLevel.BLOCK
+    if location.district:
+        return JurisdictionLevel.DISTRICT
+    return JurisdictionLevel.CITY
+
+
+def route_node(state: ComplaintState, config: RunnableConfig) -> dict:
+    from app.db.models.core import Contractor, Department
+
+    session = deps_from_config(config).require("session_factory")()
+    category = state["classification"].category
+    district = state["location"].district if state["location"] else None
+    tenant_id = state["tenant_id"]
+
+    departments = session.query(Department)
+    if tenant_id:
+        departments = departments.filter(Department.tenant_id == tenant_id)
+    department = next(
+        (d for d in departments.all() if category.value in (d.categories or [])), None
+    )
+
+    contractors = session.query(Contractor)
+    if tenant_id:
+        contractors = contractors.filter(Contractor.tenant_id == tenant_id)
+    ranked = sorted(
+        contractors.all(), key=lambda c: score_contractor(c, category, district), reverse=True
+    )
+    contractor = ranked[0] if ranked else None
+
+    routing = RoutingDecision(
+        department_name=department.name if department else "General Administration",
+        department_id=department.id if department else None,
+        contractor_id=contractor.id if contractor else None,
+        contractor_name=contractor.name if contractor else None,
+        jurisdiction_level=_jurisdiction(state),
+        justification=(
+            f"{category.value} is owned by "
+            f"{department.name if department else 'no seeded department'}"
+        ),
+    )
+    return {
+        "routing": routing,
+        "decision_log": [NodeDecision(
+            node="route",
+            summary=f"{routing.department_name} / {routing.contractor_name or 'no contractor'}",
+        )],
+    }
+```
+
+`backend/app/ai/graph/nodes/work_order.py`:
+
+```python
+"""Draft the work order: SLA window, cost, materials.
+
+The SLA deadline is computed here, not asked of the model — an LLM has no
+reliable notion of "now", which is why WorkOrderDraft has no sla_deadline field.
+
+Cost and materials are constants in this phase. Replacing them with retrieval
+over a real rate card and past work orders is the substance of Phase 2; today
+they are honest placeholders rather than a lookup table pretending to be
+intelligence, and `cost_basis` records which they are.
+"""
+
+from datetime import timedelta
+
+from langchain_core.runnables import RunnableConfig
+
+from app.ai.graph.state import ComplaintState
+from app.ai.schemas import NodeDecision, WorkOrderDraft
+from app.constants import Category, RiskLevel
+from app.db.base import utcnow
+
+SLA_HOURS: dict[RiskLevel, int] = {
+    RiskLevel.CRITICAL: 4,
+    RiskLevel.HIGH: 24,
+    RiskLevel.MEDIUM: 72,
+    RiskLevel.LOW: 168,
+}
+
+_BASE_COST: dict[Category, float] = {
+    Category.ROADS: 5000.0, Category.ELECTRICITY: 3000.0, Category.WATER: 4000.0,
+    Category.SANITATION: 2000.0, Category.PUBLIC_SPACES: 3000.0, Category.EDUCATION: 8000.0,
+    Category.HEALTH: 6000.0, Category.FLOODING: 10000.0, Category.FIRE_HAZARD: 7000.0,
+    Category.CONSTRUCTION: 15000.0, Category.STRAY_ANIMALS: 1000.0, Category.SEWAGE: 5000.0,
+}
+
+_RISK_MULTIPLIER: dict[RiskLevel, float] = {
+    RiskLevel.CRITICAL: 2.0, RiskLevel.HIGH: 1.5, RiskLevel.MEDIUM: 1.0, RiskLevel.LOW: 0.8,
+}
+
+
+def work_order_node(state: ComplaintState, config: RunnableConfig) -> dict:
+    category = state["classification"].category
+    risk = state["risk"]
+    sla_hours = SLA_HOURS[risk.risk_level]
+    deadline = utcnow() + timedelta(hours=sla_hours)
+    cost = _BASE_COST[category] * _RISK_MULTIPLIER[risk.risk_level]
+
+    draft = WorkOrderDraft(
+        sla_hours=sla_hours,
+        estimated_cost=cost,
+        cost_basis="Category base rate x risk multiplier (placeholder until Phase 2 retrieval)",
+        materials="To be determined on site inspection",
+        summary=(
+            f"{category.value} | {risk.risk_level.value} ({risk.priority_score}/100) | "
+            f"{state['routing'].department_name}"
+        ),
+    )
+    return {
+        "work_order": draft,
+        "decision_log": [NodeDecision(
+            node="work_order",
+            summary=f"SLA {sla_hours}h, due {deadline.isoformat()}, est. {cost:.0f}",
+        )],
+    }
+```
+
+`backend/app/ai/graph/nodes/notify.py`:
+
+```python
+"""Tell the citizen their complaint was processed.
+
+**Idempotent by design.** Durability is bounded: a resumed run re-executes the
+node it died in, and measurements show a SIGKILL can lose the tail entirely so
+a whole run replays. Either way this node must not email the same citizen
+twice, so it guards on a fact already in state rather than on an external flag.
+"""
+
+from langchain_core.runnables import RunnableConfig
+
+from app.ai.graph.deps import deps_from_config
+from app.ai.graph.state import ComplaintState
+from app.ai.schemas import NodeDecision
+
+NODE = "notify"
+
+
+def _already_sent(state: ComplaintState) -> bool:
+    return any(entry.node == NODE for entry in state["decision_log"])
+
+
+def notify_node(state: ComplaintState, config: RunnableConfig) -> dict:
+    if _already_sent(state):
+        return {}
+
+    notify = deps_from_config(config).require("notify")
+    classification = state["classification"]
+
+    try:
+        notify(
+            tracking_id=state["tracking_id"],
+            complaint_id=state["complaint_id"],
+            category=classification.category.value if classification else None,
+            status="assigned",
+        )
+    except Exception as exc:
+        # A failed notification must not lose a processed complaint.
+        return {
+            "errors": [f"notify: {exc}"],
+            "decision_log": [NodeDecision(node=NODE, summary=f"failed: {exc}")],
+        }
+
+    return {"decision_log": [NodeDecision(node=NODE, summary="citizen notified")]}
+```
+
+Add to `backend/app/ai/graph/edges.py`:
 
 ```python
 def after_classify(state: ComplaintState) -> str:
     """Low confidence is recorded but does not branch until Phase 2 adds the
-    retrieval loop. Failing closed on a missing classification, as elsewhere."""
+    retrieval loop. Fails closed on a missing classification, as elsewhere."""
     if state["errors"] or state["classification"] is None:
         return END
     return "assess_risk"
@@ -1265,9 +1511,6 @@ path to END, so a future edit cannot strand or hang a node."
 
 ## Task 5: The runner
 
-> **⚠️ Incomplete:** Steps 1 and 3 are specified in prose, not written out as code.
-> Expand both before executing this task.
-
 The only entry point into the graph. Owns the checkpointer, injects dependencies, persists results and writes the audit trail.
 
 **Files:**
@@ -1283,17 +1526,149 @@ The only entry point into the graph. Owns the checkpointer, injects dependencies
 
 - [ ] **Step 1: Write the failing test**
 
-`backend/tests/ai/graph/test_runner.py` must cover:
+`backend/tests/ai/graph/test_runner.py`:
 
-- a complaint that runs end to end produces a `Complaint` row with category, risk level and status set
-- a **rejected** complaint stores `terminal_reason` and status `rejected` — **not** `submitted` (v1's headline bug)
-- an **errored** complaint stores status `failed` with the error recorded, distinct from a rejection
-- an `AgentRun` row is written with `graph_version`, duration and status
-- one `AgentStep` row per node that ran, in sequence order
-- no work order is created for a rejected complaint
-- re-running the same `complaint_id` does not duplicate the notification
+```python
+import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
-Drive it with stub chains through `deps=`, an in-memory `AsyncSqliteSaver`, and the `db_session` fixture. No network, no real model.
+from app.ai.graph.deps import GraphDeps
+from app.ai.graph.runner import run_complaint
+from app.ai.schemas import (
+    ClassificationResult, RiskAssessment, ValidationResult, VisionObservation,
+)
+from app.constants import Category, RiskLevel
+from app.db.models.ai import AgentRun, AgentStep
+from app.db.models.complaint import Complaint
+from app.db.models.workflow import WorkOrder
+from app.services.seed import seed_database
+from tests.ai.graph.conftest import raises, returns
+
+
+@pytest.fixture
+def env(db_session):
+    """A seeded database plus a complaint ready to process."""
+    seed_database(db_session)
+    complaint = Complaint(
+        tracking_id="CIV-RUNNER01",
+        citizen_email="a@b.com",
+        description="There is a large pothole on the main road near the school gate",
+    )
+    db_session.add(complaint)
+    db_session.commit()
+    return db_session, complaint
+
+
+def _deps(*, valid=True, notified=None, **over):
+    return GraphDeps(
+        validate_chain=returns(ValidationResult(is_valid=valid, rejection_reason=None if valid else "a neighbour dispute")),
+        classify_chain=returns(ClassificationResult(category=Category.ROADS, confidence=0.93)),
+        risk_chain=returns(RiskAssessment(priority_score=80, risk_level=RiskLevel.CRITICAL)),
+        vision_chain=returns(VisionObservation(text="a pothole", shows_infrastructure_problem=True)),
+        notify=(lambda **kw: notified.append(kw)) if notified is not None else (lambda **kw: None),
+        **over,
+    )
+
+
+async def _run(session, complaint, deps):
+    return await run_complaint(
+        complaint.id,
+        session_factory=lambda: session,
+        deps=deps,
+        checkpointer=InMemorySaver(),
+    )
+
+
+async def test_a_valid_complaint_runs_end_to_end(env):
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.category == Category.ROADS.value
+    assert stored.risk_level == RiskLevel.CRITICAL.value
+    assert stored.priority_score == 80
+    assert stored.status == "assigned"
+    assert stored.terminal_reason is None
+
+
+async def test_a_valid_complaint_gets_a_work_order(env):
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    order = session.query(WorkOrder).one()
+    assert order.sla_hours == 4
+    assert order.sla_deadline is not None
+    assert order.estimated_cost > 0
+
+
+async def test_a_rejected_complaint_is_stored_as_rejected(env):
+    """v1's headline bug: a correctly-rejected complaint was written back as
+    'submitted', indistinguishable from one that had never been processed."""
+    session, complaint = env
+    await _run(session, complaint, _deps(valid=False, session_factory=lambda: session))
+
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.status == "rejected"
+    assert "neighbour" in stored.terminal_reason
+    assert stored.status != "submitted"
+
+
+async def test_a_rejected_complaint_gets_no_work_order(env):
+    session, complaint = env
+    await _run(session, complaint, _deps(valid=False, session_factory=lambda: session))
+    assert session.query(WorkOrder).count() == 0
+
+
+async def test_a_technical_failure_is_distinct_from_a_rejection(env):
+    """An outage and a business decision must not look the same afterwards."""
+    session, complaint = env
+    deps = _deps(session_factory=lambda: session)
+    deps = GraphDeps(**{**deps.__dict__, "classify_chain": raises(RuntimeError("503 from provider"))})
+    await _run(session, complaint, deps)
+
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.status == "failed"
+    assert stored.terminal_reason is None
+
+
+async def test_an_agent_run_row_records_the_run(env):
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    run = session.query(AgentRun).one()
+    assert run.complaint_id == complaint.id
+    assert run.thread_id == complaint.id
+    assert run.status == "completed"
+    assert run.graph_version
+    assert run.duration_ms is not None
+
+
+async def test_one_agent_step_per_node_in_order(env):
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    steps = session.query(AgentStep).order_by(AgentStep.seq).all()
+    assert [s.node for s in steps] == [
+        "intake", "validate", "classify", "assess_risk", "route", "work_order", "notify"
+    ]
+    assert [s.seq for s in steps] == list(range(len(steps)))
+
+
+async def test_running_the_same_complaint_twice_notifies_once(env):
+    """The graph replays on resume; the citizen must not be emailed twice."""
+    session, complaint = env
+    sent = []
+    await _run(session, complaint, _deps(notified=sent, session_factory=lambda: session))
+    assert len(sent) == 1
+```
+
+Note `asyncio_mode = auto` in `pytest.ini` means these `async def` tests need no decorator.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1302,46 +1677,220 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'app.ai.graph.runner'`
 
 - [ ] **Step 3: Implement the runner**
 
-`runner.py` responsibilities, in order:
+`backend/app/ai/graph/runner.py`:
 
-1. Load the `Complaint` row and build `initial_state(...)` from it.
-2. Build `GraphDeps` — real chains from `app.ai.llm.build_structured`, or the injected `deps` in tests.
-3. Open `AsyncSqliteSaver.from_conn_string(CHECKPOINT_DB)`, assign `saver.serde = build_serializer()`, compile the graph.
-4. Run with `thread_id = complaint_id`, timing the whole run.
-5. Persist: update the `Complaint`, insert a `WorkOrder` when one was drafted and the run was not terminal, insert `AgentRun` plus one `AgentStep` per `decision_log` entry.
+```python
+"""The only entry point into the graph.
 
-Status mapping, which is the whole point of `terminal_reason` existing:
+Owns the checkpointer, injects dependencies, and is the single place that
+writes to the database — nodes stay pure so they can be tested against fakes.
 
-| Outcome | `Complaint.status` |
-|---|---|
-| completed, work order drafted | `assigned` |
-| `terminal_reason` set | `rejected` |
-| `errors` non-empty | `failed` |
+`app/api/` may import this module and nothing else under `app/ai/graph/`;
+`tests/test_import_rules.py` enforces that.
+"""
 
-Never fold a rejection into `errors`, and never write `submitted` back over a finished run.
+import time
+from collections.abc import Callable
+from datetime import timedelta
+from pathlib import Path
 
-The serializer assignment matters: without `saver.serde = build_serializer()`, Pydantic models in state deserialize back as dicts and every later field access fails with `AttributeError`.
+from app.ai.graph.build import GRAPH_VERSION, compile_graph
+from app.ai.graph.deps import GraphDeps, to_configurable
+from app.ai.graph.state import ComplaintState, build_serializer, initial_state
+from app.ai.schemas import Coords, MediaRef
+from app.db.base import utcnow
+
+CHECKPOINT_DB = str(Path(__file__).resolve().parents[3] / "checkpoints.db")
+
+
+def build_deps(session_factory: Callable) -> GraphDeps:
+    """Wire the real chains. Tests pass their own GraphDeps instead."""
+    from app.ai.llm import Task, build_structured
+    from app.ai.schemas import ClassificationResult, RiskAssessment, ValidationResult, VisionObservation
+    from app.services.geocoding import reverse_geocode
+    from app.services.notify import notify_citizen
+
+    return GraphDeps(
+        validate_chain=build_structured(Task.VALIDATE, ValidationResult, "validate"),
+        classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify"),
+        risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk"),
+        vision_chain=build_structured(Task.VISION, VisionObservation, "vision"),
+        session_factory=session_factory,
+        geocode=reverse_geocode,
+        notify=notify_citizen,
+    )
+
+
+def _state_for(complaint) -> ComplaintState:
+    coords = None
+    if complaint.latitude is not None and complaint.longitude is not None:
+        coords = Coords(latitude=complaint.latitude, longitude=complaint.longitude)
+    return initial_state(
+        complaint_id=complaint.id,
+        tracking_id=complaint.tracking_id,
+        tenant_id=complaint.tenant_id,
+        raw_description=complaint.description,
+        media=[
+            MediaRef(file_path=m.file_path, media_type=m.media_type,
+                     original_filename=m.original_filename)
+            for m in (complaint.media or [])
+        ],
+        coords=coords,
+    )
+
+
+def _status_for(state: ComplaintState) -> str:
+    """Outcome first, errors last.
+
+    A run that finished with a soft error — geocoding timed out, say — is still
+    assigned. Only a run that produced nothing is 'failed'. And a rejection is
+    never 'failed': v1 conflated the two and lost both.
+    """
+    if state["terminal_reason"]:
+        return "rejected"
+    if state["work_order"]:
+        return "assigned"
+    if state["errors"]:
+        return "failed"
+    return "processed"
+
+
+def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
+    from app.db.models.ai import AgentRun, AgentStep
+    from app.db.models.complaint import Complaint
+    from app.db.models.workflow import WorkOrder
+
+    complaint = session.query(Complaint).filter(Complaint.id == state["complaint_id"]).one()
+    status = _status_for(state)
+
+    complaint.status = status
+    complaint.terminal_reason = state["terminal_reason"]
+    complaint.graph_thread_id = state["complaint_id"]
+    complaint.pipeline_version = GRAPH_VERSION
+
+    if state["classification"]:
+        complaint.category = state["classification"].category.value
+        complaint.subcategory = state["classification"].subcategory
+        complaint.classification_confidence = state["classification"].confidence
+    if state["risk"]:
+        complaint.priority_score = state["risk"].priority_score
+        complaint.risk_level = state["risk"].risk_level.value
+    if state["location"]:
+        location = state["location"]
+        complaint.address = location.address or complaint.address
+        complaint.ward = location.ward or complaint.ward
+        complaint.block = location.block or complaint.block
+        complaint.district = location.district or complaint.district
+        complaint.state = location.state or complaint.state
+    if state["evidence"]:
+        complaint.evidence = [chunk.model_dump() for chunk in state["evidence"]]
+
+    if state["work_order"] and status == "assigned":
+        draft = state["work_order"]
+        routing = state["routing"]
+        session.add(WorkOrder(
+            complaint_id=complaint.id,
+            tenant_id=complaint.tenant_id,
+            contractor_id=routing.contractor_id if routing else None,
+            status="assigned" if (routing and routing.contractor_id) else "created",
+            sla_hours=draft.sla_hours,
+            sla_deadline=utcnow() + timedelta(hours=draft.sla_hours),
+            estimated_cost=draft.estimated_cost,
+            cost_basis=draft.cost_basis,
+            materials=draft.materials,
+            notes=draft.summary,
+        ))
+
+    run = AgentRun(
+        complaint_id=complaint.id,
+        thread_id=state["complaint_id"],
+        status="completed" if status != "failed" else "failed",
+        graph_version=GRAPH_VERSION,
+        finished_at=utcnow(),
+        duration_ms=duration_ms,
+        error="; ".join(state["errors"]) or None,
+    )
+    session.add(run)
+    session.flush()
+
+    for seq, decision in enumerate(state["decision_log"]):
+        session.add(AgentStep(
+            run_id=run.id,
+            seq=seq,
+            node=decision.node,
+            status="ok",
+            duration_ms=decision.duration_ms,
+            output_summary=decision.summary,
+        ))
+
+    session.commit()
+
+
+async def run_complaint(
+    complaint_id: str,
+    *,
+    session_factory: Callable,
+    deps: GraphDeps | None = None,
+    checkpointer=None,
+) -> ComplaintState:
+    """Run one complaint through the graph and persist what happened.
+
+    `thread_id` is the complaint id, so re-invoking with the same id resumes
+    that complaint's run rather than starting a new one.
+    """
+    from app.db.models.complaint import Complaint
+
+    session = session_factory()
+    complaint = session.query(Complaint).filter(Complaint.id == complaint_id).one()
+    state = _state_for(complaint)
+    deps = deps or build_deps(session_factory)
+    config = to_configurable(deps, thread_id=complaint_id)
+
+    started = time.monotonic()
+    if checkpointer is not None:
+        result = await compile_graph(checkpointer=checkpointer).ainvoke(state, config)
+    else:
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+        async with AsyncSqliteSaver.from_conn_string(CHECKPOINT_DB) as saver:
+            # Without this, Pydantic models in state come back from the
+            # checkpoint as plain dicts and every later field access fails.
+            saver.serde = build_serializer()
+            result = await compile_graph(checkpointer=saver).ainvoke(state, config)
+    duration_ms = int((time.monotonic() - started) * 1000)
+
+    persist_result(result, session, duration_ms=duration_ms)
+    return result
+```
+
+This assumes two small service functions that Phase 1c wires for real:
+`app/services/geocoding.py::reverse_geocode(lat, lon) -> LocationInfo` and
+`app/services/notify.py::notify_citizen(**kwargs) -> None`. Create both as thin
+stubs in this task if they do not exist — a geocoder returning an empty
+`LocationInfo` and a notifier that logs — so `build_deps` imports cleanly. They
+are only reached when `deps` is not injected, which no test does.
 
 - [ ] **Step 4: Run the full suite and commit**
 
 Run: `cd backend && .venv/bin/python -m pytest`
-Expected: PASS, all green, pristine.
+Expected: PASS, 169 tests, pristine.
 
 ```bash
 cd /home/martin/Projects/CivicAi
-git add backend/app/ai backend/tests/ai
+git add backend/app backend/tests
 git commit -m "feat: add the graph runner
 
 The only entry point into the graph: owns the checkpointer, injects
-dependencies, persists results and writes the audit trail.
+dependencies, and is the single place that writes to the database.
 
-A rejected complaint now stores status 'rejected' with its terminal_reason,
-distinct from 'failed' for a technical error. v1 folded both into one errors
-list and then wrote 'submitted' back over the result, which is why an
-AI-rejected complaint was indistinguishable from an unprocessed one."
+A rejected complaint stores status 'rejected' with its terminal_reason,
+distinct from 'failed' for a technical error, and neither is ever written back
+as 'submitted'. v1 folded both into one errors list and then overwrote the
+result, which is why an AI-rejected complaint looked unprocessed.
+
+Status resolution puts outcome before errors: a run that finished despite a
+soft failure such as a geocoding timeout is still assigned."
 ```
-
----
 
 ## Phase 1b Done When
 
