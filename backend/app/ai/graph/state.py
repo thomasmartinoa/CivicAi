@@ -22,7 +22,7 @@ from app.ai.schemas import (
     NodeDecision, RetrievedChunk, RiskAssessment, RoutingDecision,
     ValidationResult, WorkOrderDraft,
 )
-from app.constants import Category, RiskLevel
+from app.constants import Category, JurisdictionLevel, RiskLevel
 
 
 class ComplaintState(TypedDict):
@@ -65,7 +65,7 @@ CHECKPOINT_ALLOWLIST: list[type] = [
     ClassificationResult, Coords, LocationInfo, MediaInsight, MediaRef,
     NodeDecision, RetrievedChunk, RiskAssessment, RoutingDecision,
     ValidationResult, WorkOrderDraft,
-    Category, RiskLevel,
+    Category, JurisdictionLevel, RiskLevel,
 ]
 
 

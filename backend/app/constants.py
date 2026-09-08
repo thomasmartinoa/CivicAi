@@ -30,6 +30,13 @@ class RiskLevel(StrEnum):
     LOW = "low"
 
 
+class JurisdictionLevel(StrEnum):
+    WARD = "ward"
+    BLOCK = "block"
+    DISTRICT = "district"
+    CITY = "city"
+
+
 # Every Category MUST appear here, and every department named here MUST be
 # created by app/services/seed.py. Both invariants are tested.
 CATEGORY_DEPARTMENT: dict[Category, str] = {

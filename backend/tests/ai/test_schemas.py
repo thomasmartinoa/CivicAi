@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 import pytest
 from pydantic import ValidationError
 
@@ -40,9 +38,39 @@ def test_priority_score_is_bounded_to_0_100():
             RiskAssessment(priority_score=bad, risk_level="high")
 
 
-def test_risk_factors_are_each_bounded_to_0_25():
+@pytest.mark.parametrize(
+    "field", ["category_severity", "population_impact", "safety_risk", "urgency"]
+)
+def test_risk_factors_are_each_bounded_to_0_25(field):
     with pytest.raises(ValidationError):
-        RiskAssessment(priority_score=50, risk_level="medium", safety_risk=30)
+        RiskAssessment(priority_score=50, risk_level="medium", **{field: 30})
+
+
+def test_risk_factors_summing_to_the_score_is_accepted():
+    assessment = RiskAssessment(
+        priority_score=50, risk_level="medium",
+        category_severity=15, population_impact=10, safety_risk=15, urgency=10,
+    )
+    assert assessment.priority_score == 50
+
+
+def test_risk_factors_contradicting_the_score_are_rejected():
+    """A model returning factors that sum to 60 with priority_score=90 must
+    not pass: the score would be wrong and everything downstream (the SLA)
+    would be set off it."""
+    with pytest.raises(ValidationError):
+        RiskAssessment(
+            priority_score=90, risk_level="critical",
+            category_severity=20, population_impact=20, safety_risk=10, urgency=10,
+        )
+
+
+def test_risk_assessment_without_factors_is_still_accepted():
+    """The four factors default to 0, so a RiskAssessment constructed with
+    only priority_score and risk_level must not be forced to also supply
+    factors that sum correctly (several existing tests do exactly this)."""
+    assessment = RiskAssessment(priority_score=50, risk_level="medium")
+    assert assessment.category_severity == 0
 
 
 def test_risk_level_must_match_the_score_band():
@@ -71,13 +99,22 @@ def test_validation_result_defaults_are_empty_not_none():
     assert result.rejection_reason is None
 
 
-def test_work_order_draft_round_trips_a_datetime():
-    draft = WorkOrderDraft(
-        sla_hours=4,
-        sla_deadline=datetime(2026, 9, 3, tzinfo=timezone.utc),
-        estimated_cost=10000.0,
-    )
-    assert draft.sla_deadline.year == 2026
+def test_work_order_draft_has_no_sla_deadline_field():
+    """The model has no reliable notion of 'now'; Phase 1b computes the
+    deadline itself from sla_hours instead of trusting a model timestamp."""
+    draft = WorkOrderDraft(sla_hours=4, estimated_cost=10000.0)
+    assert not hasattr(draft, "sla_deadline")
+
+
+def test_work_order_draft_rejects_non_positive_sla_hours():
+    for bad in (0, -1):
+        with pytest.raises(ValidationError):
+            WorkOrderDraft(sla_hours=bad, estimated_cost=10000.0)
+
+
+def test_work_order_draft_rejects_negative_cost():
+    with pytest.raises(ValidationError):
+        WorkOrderDraft(sla_hours=4, estimated_cost=-1.0)
 
 
 def test_the_remaining_models_construct_with_minimal_input():
@@ -88,4 +125,4 @@ def test_the_remaining_models_construct_with_minimal_input():
     assert RoutingDecision(department_name="Public Works Department",
                            jurisdiction_level="ward").contractor_id is None
     assert NodeDecision(node="classify", summary="ok").duration_ms is None
-    assert RetrievedChunk(source="sop_roads.md").score is None
+    assert RetrievedChunk(node="assess_risk", source="sop_roads.md").score is None
