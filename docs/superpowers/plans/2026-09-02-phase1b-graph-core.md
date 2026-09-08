@@ -1457,7 +1457,7 @@ The shape IS the business process. v1's equivalent was the order of seven
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy
 
-from app.ai.graph.edges import after_classify, after_validate
+from app.ai.graph.edges import after_assess_risk, after_classify, after_validate
 from app.ai.graph.nodes.assess_risk import assess_risk_node
 from app.ai.graph.nodes.classify import classify_node
 from app.ai.graph.nodes.intake import fan_out_media, intake_node
@@ -1493,7 +1493,9 @@ def build_graph() -> StateGraph:
     builder.add_edge("analyse_media", "validate")
     builder.add_conditional_edges("validate", after_validate, ["classify", END])
     builder.add_conditional_edges("classify", after_classify, ["assess_risk", END])
-    builder.add_edge("assess_risk", "route")
+    # Fail closed: work_order reads state["risk"] unconditionally, so a failed
+    # assessment must not reach it.
+    builder.add_conditional_edges("assess_risk", after_assess_risk, ["route", END])
     builder.add_edge("route", "work_order")
     builder.add_edge("work_order", "notify")
     builder.add_edge("notify", END)
