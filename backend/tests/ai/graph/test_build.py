@@ -51,3 +51,13 @@ def test_llm_nodes_carry_a_retry_policy():
     builder = build_graph()
     for name in ("validate", "classify", "assess_risk", "analyse_media"):
         assert builder.nodes[name].retry_policy, f"{name} has no retry policy"
+
+
+def test_non_model_nodes_carry_no_retry_policy():
+    """RetryPolicy retries *within* one node execution, before the node's update
+    reaches state — so notify's decision_log idempotency guard has not been
+    written yet on the retry. A retry policy here would double-send the citizen
+    notification and the guard could not catch it."""
+    builder = build_graph()
+    for name in ("intake", "route", "work_order", "notify"):
+        assert not builder.nodes[name].retry_policy, f"{name} must not retry"
