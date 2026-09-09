@@ -1539,7 +1539,7 @@ The only entry point into the graph. Owns the checkpointer, injects dependencies
 - Produces:
   - `app.ai.graph.runner.build_deps(session_factory) -> GraphDeps` — wires real chains from `app.ai.llm`
   - `app.ai.graph.runner.run_complaint(complaint_id, *, session_factory, deps=None, checkpointer=None) -> ComplaintState`
-  - `app.ai.graph.runner.persist_result(state, session_factory) -> None` — writes `Complaint`, `WorkOrder`, `AgentRun`, `AgentStep`
+  - `app.ai.graph.runner.persist_result(state, session, *, duration_ms: int) -> None` — writes `Complaint`, `WorkOrder`, `AgentRun`, `AgentStep`; idempotent for `WorkOrder` because a resumed run replays and `work_orders.complaint_id` is unique
   - `app.ai.graph.runner.CHECKPOINT_DB: str`
 
 - [ ] **Step 1: Write the failing test**
