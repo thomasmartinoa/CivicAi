@@ -137,18 +137,27 @@ def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
     if state["work_order"] and status == "assigned":
         draft = state["work_order"]
         routing = state["routing"]
-        session.add(WorkOrder(
-            complaint_id=complaint.id,
-            tenant_id=complaint.tenant_id,
-            contractor_id=routing.contractor_id if routing else None,
-            status="assigned" if (routing and routing.contractor_id) else "created",
-            sla_hours=draft.sla_hours,
-            sla_deadline=utcnow() + timedelta(hours=draft.sla_hours),
-            estimated_cost=draft.estimated_cost,
-            cost_basis=draft.cost_basis,
-            materials=draft.materials,
-            notes=draft.summary,
-        ))
+        existing = (
+            session.query(WorkOrder)
+            .filter(WorkOrder.complaint_id == complaint.id)
+            .one_or_none()
+        )
+        # A resumed run replays nodes that already succeeded. work_orders.complaint_id
+        # is unique, so a second insert raises IntegrityError and the resume dies on
+        # persistence — the exact scenario checkpointing exists to support.
+        if existing is None:
+            session.add(WorkOrder(
+                complaint_id=complaint.id,
+                tenant_id=complaint.tenant_id,
+                contractor_id=routing.contractor_id if routing else None,
+                status="assigned" if (routing and routing.contractor_id) else "created",
+                sla_hours=draft.sla_hours,
+                sla_deadline=utcnow() + timedelta(hours=draft.sla_hours),
+                estimated_cost=draft.estimated_cost,
+                cost_basis=draft.cost_basis,
+                materials=draft.materials,
+                notes=draft.summary,
+            ))
 
     run = AgentRun(
         complaint_id=complaint.id,

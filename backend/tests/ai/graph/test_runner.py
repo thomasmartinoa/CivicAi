@@ -133,9 +133,24 @@ async def test_one_agent_step_per_node_in_order(env):
     assert [s.seq for s in steps] == list(range(len(steps)))
 
 
-async def test_running_the_same_complaint_twice_notifies_once(env):
-    """The graph replays on resume; the citizen must not be emailed twice."""
+async def test_re_running_the_same_complaint_is_idempotent(env):
+    """A resumed run replays nodes that already succeeded. It must not email the
+    citizen twice, and it must not fail inserting a second work order —
+    work_orders.complaint_id is unique."""
     session, complaint = env
     sent = []
-    await _run(session, complaint, _deps(notified=sent, session_factory=lambda: session))
-    assert len(sent) == 1
+    deps = _deps(notified=sent, session_factory=lambda: session)
+    saver = InMemorySaver()
+
+    for _ in range(2):
+        await run_complaint(
+            complaint.id,
+            session_factory=lambda: session,
+            deps=deps,
+            checkpointer=saver,
+        )
+
+    session.expire_all()
+    assert len(sent) == 1, "the citizen was notified twice"
+    assert session.query(WorkOrder).count() == 1, "a duplicate work order was inserted"
+    assert session.query(AgentRun).count() == 2, "each run should be recorded"
