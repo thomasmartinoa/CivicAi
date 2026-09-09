@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 import pytest
+from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.ai.graph.deps import GraphDeps
@@ -153,4 +154,36 @@ async def test_re_running_the_same_complaint_is_idempotent(env):
     session.expire_all()
     assert len(sent) == 1, "the citizen was notified twice"
     assert session.query(WorkOrder).count() == 1, "a duplicate work order was inserted"
-    assert session.query(AgentRun).count() == 2, "each run should be recorded"
+    # Not 2: the second invocation lands on an already-completed thread, so
+    # _advance short-circuits to the stored snapshot without calling ainvoke,
+    # and run_complaint skips persist_result entirely -- nothing new happened,
+    # so no second AgentRun is recorded.
+    assert session.query(AgentRun).count() == 1, "a completed run should not record a second AgentRun"
+
+
+async def test_a_completed_run_is_not_re_executed(env):
+    """Passing an input restarts the graph from START; only None resumes. Without
+    that distinction a 'resume' re-invokes every chain for real and re-appends the
+    whole decision log as duplicate AgentStep rows."""
+    session, complaint = env
+    calls = {"classify": 0}
+
+    def counting(_):
+        calls["classify"] += 1
+        return ClassificationResult(category=Category.ROADS, confidence=0.93)
+
+    deps = replace(_deps(session_factory=lambda: session),
+                   classify_chain=RunnableLambda(counting))
+    saver = InMemorySaver()
+
+    for _ in range(3):
+        await run_complaint(complaint.id, session_factory=lambda: session,
+                            deps=deps, checkpointer=saver)
+
+    session.expire_all()
+    assert calls["classify"] == 1, "a completed run was re-executed"
+    steps = session.query(AgentStep).all()
+    assert len(steps) == 7, f"expected one row per node, got {len(steps)}"
+    assert [s.node for s in session.query(AgentStep).order_by(AgentStep.seq).all()] == [
+        "intake", "validate", "classify", "assess_risk", "route", "work_order", "notify"
+    ]
