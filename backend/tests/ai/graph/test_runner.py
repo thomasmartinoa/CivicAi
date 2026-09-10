@@ -187,3 +187,35 @@ async def test_a_completed_run_is_not_re_executed(env):
     assert [s.node for s in session.query(AgentStep).order_by(AgentStep.seq).all()] == [
         "intake", "validate", "classify", "assess_risk", "route", "work_order", "notify"
     ]
+
+
+async def test_a_failed_persist_is_retried_on_the_next_run(env, monkeypatch):
+    """The checkpoint and the database are separate stores. A completed thread
+    whose persistence failed must not be short-circuited forever."""
+    session, complaint = env
+    deps = _deps(session_factory=lambda: session)
+    saver = InMemorySaver()
+
+    import app.ai.graph.runner as runner_module
+
+    real_persist = runner_module.persist_result
+
+    def boom(*a, **k):
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(runner_module, "persist_result", boom)
+    with pytest.raises(RuntimeError):
+        await run_complaint(complaint.id, session_factory=lambda: session,
+                            deps=deps, checkpointer=saver)
+
+    session.rollback()
+    session.expire_all()
+    assert session.query(AgentRun).count() == 0, "nothing should have persisted"
+
+    monkeypatch.setattr(runner_module, "persist_result", real_persist)
+    await run_complaint(complaint.id, session_factory=lambda: session,
+                        deps=deps, checkpointer=saver)
+
+    session.expire_all()
+    assert session.query(AgentRun).count() == 1, "the retry did not persist"
+    assert session.query(Complaint).one().status == "assigned"

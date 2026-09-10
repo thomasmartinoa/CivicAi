@@ -32,6 +32,10 @@ class GraphDeps:
     risk_chain: Runnable | None = None
     vision_chain: Runnable | None = None
     session_factory: Callable | None = None
+    """Must return a session this call may close. It is closed on every path,
+    including on error, which expunges its identity map — so a caller holding
+    ORM objects across the call to run_complaint must re-query them afterwards
+    rather than reuse the instances it passed in."""
     geocode: Callable | None = None
     notify: Callable | None = None
 

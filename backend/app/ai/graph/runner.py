@@ -104,17 +104,13 @@ def _status_for(state: ComplaintState) -> str:
     return "processed"
 
 
-def persist_result(state: ComplaintState, session, *, duration_ms: int, steps_from: int = 0) -> None:
-    """`steps_from` is the length of `decision_log` before this invocation ran.
+def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
+    """Write complaint state changes and audit trail to the database.
 
     `decision_log` carries an `operator.add` reducer, so it accumulates across
-    every invocation against the same checkpoint thread rather than resetting
-    per call. Without slicing at `steps_from`, a resumed run's persist_result
-    would re-record entries an earlier invocation already wrote as
-    `AgentStep` rows under the new `AgentRun` too — quadratic growth, and an
-    audit trail that shows the same node run more than once under one run.
-    Defaults to 0 so a fresh run (an empty decision_log to start with) and any
-    existing single-invocation caller are unaffected.
+    every invocation against the same checkpoint thread. This function queries
+    the database to determine how many AgentSteps were already persisted for
+    this complaint, then writes only the new decisions.
     """
     from app.db.models.ai import AgentRun, AgentStep
     from app.db.models.complaint import Complaint
@@ -182,7 +178,19 @@ def persist_result(state: ComplaintState, session, *, duration_ms: int, steps_fr
     session.add(run)
     session.flush()
 
-    for seq, decision in enumerate(state["decision_log"][steps_from:]):
+    # The checkpoint and the database are separate stores. A previous invocation
+    # may have completed the graph and then failed to persist, so "the thread is
+    # finished" is not evidence that the results were written. Count from the
+    # database to determine which decision_log entries are new.
+    already_recorded = (
+        session.query(AgentStep)
+        .join(AgentRun, AgentStep.run_id == AgentRun.id)
+        .filter(AgentRun.complaint_id == state["complaint_id"])
+        .count()
+    )
+    # The decision_log reducer accumulates across invocations, so a resumed run
+    # arrives carrying the earlier run's entries. Write only what is new.
+    for seq, decision in enumerate(state["decision_log"][already_recorded:]):
         session.add(AgentStep(
             run_id=run.id,
             seq=seq,
@@ -230,14 +238,19 @@ async def run_complaint(
 
     `thread_id` is the complaint id, so re-invoking with the same id resumes
     that complaint's run rather than starting a new one.
+
+    session_factory must return a session this call may close. It is closed on
+    every path, including on error, which expunges its identity map — so a
+    caller holding ORM objects across this call must re-query them afterwards
+    rather than reuse the instances it passed in.
     """
+    from app.db.models.ai import AgentRun
     from app.db.models.complaint import Complaint
 
     session = session_factory()
     try:
         complaint = session.query(Complaint).filter(Complaint.id == complaint_id).one()
         state = _state_for(complaint)
-        steps_before = len(state["decision_log"])  # 0 on a fresh run
         deps = deps or build_deps(session_factory)
         config = to_configurable(deps, thread_id=complaint_id)
 
@@ -256,8 +269,14 @@ async def run_complaint(
                 result, ran = await _advance(graph, state, config)
         duration_ms = int((time.monotonic() - started) * 1000)
 
-        if ran:
-            persist_result(result, session, duration_ms=duration_ms, steps_from=steps_before)
+        # The checkpoint and the database are separate stores. A previous invocation
+        # may have completed the graph and then failed to persist, so "the thread is
+        # finished" is not evidence that the results were written. Ask the database.
+        already_persisted = (
+            session.query(AgentRun).filter(AgentRun.complaint_id == complaint_id).count() > 0
+        )
+        if ran or not already_persisted:
+            persist_result(result, session, duration_ms=duration_ms)
         return result
     finally:
         session.close()
