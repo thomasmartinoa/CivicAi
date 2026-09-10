@@ -32,42 +32,80 @@ def build_deps(session_factory: Callable) -> GraphDeps:
         validate_chain=build_structured(Task.VALIDATE, ValidationResult, "validate"),
         classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify"),
         risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk"),
-        vision_chain=_vision_chain(),
+        vision_chain=_lazy_vision_chain(),
         session_factory=session_factory,
         geocode=reverse_geocode,
         notify=notify_citizen,
     )
 
 
-def _vision_chain():
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def _media_to_prompt_vars(payload: dict) -> dict:
     """Adapt the media node's {"file_path"} contract to the vision prompt.
 
     The prompt takes `image_url` and `image_context`; the node deliberately knows
     nothing about loading files, so the bridge lives here. Reading bytes in the
     node would make it untestable without a filesystem.
+
+    file_path comes from the database and is never trusted: a traversal here
+    would be an arbitrary local file read, base64-encoded and sent to the
+    model. Path(...).name discards any directory component -- the strongest
+    containment available, since ComplaintMedia.file_path is stored as
+    "uploads/<name>" with no subdirectories.
     """
     import base64
     import mimetypes
-    from pathlib import Path
 
+    from app.config import settings
+
+    upload_root = Path(settings.upload_dir).resolve()
+    candidate = (upload_root / Path(payload["file_path"]).name).resolve()
+    if upload_root not in candidate.parents:
+        raise ValueError(f"media path escapes the upload root: {payload['file_path']!r}")
+    if candidate.stat().st_size > MAX_IMAGE_BYTES:
+        raise ValueError(f"media file too large: {candidate.stat().st_size} bytes")
+
+    mime = mimetypes.guess_type(str(candidate))[0] or "image/jpeg"
+    encoded = base64.b64encode(candidate.read_bytes()).decode("ascii")
+    return {
+        "image_url": f"data:{mime};base64,{encoded}",
+        "image_context": "Describe any infrastructure problem visible in this photograph.",
+    }
+
+
+def _vision_chain():
+    """Wire `_media_to_prompt_vars` in front of the vision LLM chain."""
     from langchain_core.runnables import RunnableLambda
 
     from app.ai.llm import Task, build_structured
     from app.ai.schemas import VisionObservation
-    from app.config import settings
 
-    def to_prompt_vars(payload: dict) -> dict:
-        path = Path(settings.upload_dir).parent / payload["file_path"]
-        mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
-        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-        return {
-            "image_url": f"data:{mime};base64,{encoded}",
-            "image_context": "Describe any infrastructure problem visible in this photograph.",
-        }
-
-    return RunnableLambda(to_prompt_vars) | build_structured(
+    return RunnableLambda(_media_to_prompt_vars) | build_structured(
         Task.VISION, VisionObservation, "vision"
     )
+
+
+def _lazy_vision_chain():
+    """Defer building the real vision chain until a node actually invokes it.
+
+    build_deps runs once per complaint regardless of whether it carries media,
+    and building the chain means constructing an LLM client (which can itself
+    raise NoModelConfigured). The overwhelmingly common case is no media at
+    all, so eagerly paying that cost -- and that failure mode -- on every run
+    is wasted work for a chain most complaints never touch.
+    """
+    from langchain_core.runnables import RunnableLambda
+
+    cache: dict = {}
+
+    def invoke_lazily(payload: dict):
+        if "chain" not in cache:
+            cache["chain"] = _vision_chain()
+        return cache["chain"].invoke(payload)
+
+    return RunnableLambda(invoke_lazily)
 
 
 def _state_for(complaint) -> ComplaintState:

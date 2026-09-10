@@ -4,8 +4,9 @@ import pytest
 from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import InMemorySaver
 
+import app.ai.graph.runner as runner_module
 from app.ai.graph.deps import GraphDeps
-from app.ai.graph.runner import run_complaint
+from app.ai.graph.runner import _lazy_vision_chain, _media_to_prompt_vars, run_complaint
 from app.ai.schemas import (
     ClassificationResult, RiskAssessment, ValidationResult, VisionObservation,
 )
@@ -241,3 +242,53 @@ async def test_a_failed_persist_is_retried_on_the_next_run(env, monkeypatch):
     session.expire_all()
     assert session.query(AgentRun).count() == 1, "the retry did not persist"
     assert session.query(Complaint).one().status == "assigned"
+
+
+def test_a_traversal_path_raises_rather_than_reading(tmp_path, monkeypatch):
+    """file_path comes from the database and is never trusted. Path(...).name
+    strips directory components, so an ordinary '../../x' collapses harmlessly
+    -- but a file_path of '..' survives .name unchanged and, joined onto the
+    upload root and resolved, lands outside it. That must be rejected, not read."""
+    from app.config import settings
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    monkeypatch.setattr(settings, "upload_dir", str(upload_dir))
+
+    with pytest.raises(ValueError, match="escapes the upload root"):
+        _media_to_prompt_vars({"file_path": ".."})
+
+
+def test_an_oversized_image_is_rejected_without_being_read(tmp_path, monkeypatch):
+    from app.config import settings
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    big = upload_dir / "big.jpg"
+    big.write_bytes(b"x" * (runner_module.MAX_IMAGE_BYTES + 1))
+    monkeypatch.setattr(settings, "upload_dir", str(upload_dir))
+
+    with pytest.raises(ValueError, match="too large"):
+        _media_to_prompt_vars({"file_path": "big.jpg"})
+
+
+def test_the_vision_chain_is_not_built_until_something_invokes_it(monkeypatch):
+    """build_deps runs on every complaint, media or not. Building the real
+    vision chain means constructing an LLM client -- wasted work, and a wasted
+    failure mode, for the overwhelmingly common no-media complaint."""
+    calls = {"n": 0}
+
+    def counting():
+        calls["n"] += 1
+        return RunnableLambda(lambda payload: {"seen": payload})
+
+    monkeypatch.setattr(runner_module, "_vision_chain", counting)
+
+    lazy = _lazy_vision_chain()
+    assert calls["n"] == 0, "the real chain was built before anything invoked it"
+
+    assert lazy.invoke({"file_path": "a.jpg"}) == {"seen": {"file_path": "a.jpg"}}
+    assert calls["n"] == 1
+
+    lazy.invoke({"file_path": "b.jpg"})
+    assert calls["n"] == 1, "the chain should be built once and reused"

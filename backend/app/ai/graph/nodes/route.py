@@ -53,25 +53,28 @@ def _jurisdiction(state: ComplaintState) -> JurisdictionLevel:
 def route_node(state: ComplaintState, config: RunnableConfig) -> dict:
     from app.db.models.core import Contractor, Department
 
-    session = deps_from_config(config).require("session_factory")()
     category = state["classification"].category
     district = state["location"].district if state["location"] else None
     tenant_id = state["tenant_id"]
 
-    departments = session.query(Department)
-    if tenant_id:
-        departments = departments.filter(Department.tenant_id == tenant_id)
-    department = next(
-        (d for d in departments.all() if category.value in (d.categories or [])), None
-    )
+    session = deps_from_config(config).require("session_factory")()
+    try:
+        departments = session.query(Department)
+        if tenant_id:
+            departments = departments.filter(Department.tenant_id == tenant_id)
+        department = next(
+            (d for d in departments.all() if category.value in (d.categories or [])), None
+        )
 
-    contractors = session.query(Contractor)
-    if tenant_id:
-        contractors = contractors.filter(Contractor.tenant_id == tenant_id)
-    ranked = sorted(
-        contractors.all(), key=lambda c: score_contractor(c, category, district), reverse=True
-    )
-    contractor = ranked[0] if ranked else None
+        contractors = session.query(Contractor)
+        if tenant_id:
+            contractors = contractors.filter(Contractor.tenant_id == tenant_id)
+        ranked = sorted(
+            contractors.all(), key=lambda c: score_contractor(c, category, district), reverse=True
+        )
+        contractor = ranked[0] if ranked else None
+    finally:
+        session.close()
 
     routing = RoutingDecision(
         department_name=department.name if department else "General Administration",
