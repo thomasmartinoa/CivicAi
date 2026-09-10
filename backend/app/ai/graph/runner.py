@@ -228,7 +228,7 @@ def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
     )
     # The decision_log reducer accumulates across invocations, so a resumed run
     # arrives carrying the earlier run's entries. Write only what is new.
-    for seq, decision in enumerate(state["decision_log"][already_recorded:]):
+    for seq, decision in enumerate(state["decision_log"][already_recorded:], start=already_recorded):
         session.add(AgentStep(
             run_id=run.id,
             seq=seq,
