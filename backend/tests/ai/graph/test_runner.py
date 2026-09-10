@@ -94,6 +94,28 @@ async def test_a_rejected_complaint_gets_no_work_order(env):
     assert session.query(WorkOrder).count() == 0
 
 
+async def test_a_geocode_failure_degrades_but_does_not_terminate(env):
+    """intake documents geocoding failure as degradation. errors accumulates via a
+    reducer and is never cleared, so a conditional edge that checks it kills the
+    complaint at the next branch -- for a fault that has nothing to do with it."""
+    session, complaint = env
+    complaint.latitude = 12.9716
+    complaint.longitude = 77.5946
+    session.commit()
+
+    def boom(lat, lon):
+        raise RuntimeError("nominatim slow")
+
+    deps = replace(_deps(session_factory=lambda: session), geocode=boom)
+    await _run(session, complaint, deps)
+
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.status == "assigned", "a geocode failure should not fail the complaint"
+    assert stored.category == "ROADS"
+    assert session.query(WorkOrder).count() == 1
+
+
 async def test_a_technical_failure_is_distinct_from_a_rejection(env):
     """An outage and a business decision must not look the same afterwards."""
     session, complaint = env

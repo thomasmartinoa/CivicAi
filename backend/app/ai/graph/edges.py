@@ -15,8 +15,6 @@ CONFIDENCE_THRESHOLD = 0.7
 
 
 def after_validate(state: ComplaintState) -> str:
-    if state["errors"]:
-        return END
     validation = state["validation"]
     if validation is None or not validation.is_valid:
         return END
@@ -25,15 +23,21 @@ def after_validate(state: ComplaintState) -> str:
 
 def after_classify(state: ComplaintState) -> str:
     """Low confidence is recorded but does not branch until Phase 2 adds the
-    retrieval loop. Fails closed on a missing classification, as elsewhere."""
-    if state["errors"] or state["classification"] is None:
+    retrieval loop. Fails closed on a missing classification, as elsewhere.
+
+    Does not check state["errors"]: that field accumulates via an operator.add
+    reducer and is never cleared, so an unrelated upstream soft error (a failed
+    geocode, a bad media file) would otherwise still be sitting there and end
+    a run that has everything this node needs."""
+    if state["classification"] is None:
         return END
     return "assess_risk"
 
 
 def after_assess_risk(state: ComplaintState) -> str:
     """Fail closed: work_order reads state["risk"] unconditionally, so a failed
-    assessment must not reach it."""
-    if state["errors"] or state["risk"] is None:
+    assessment must not reach it. Does not check state["errors"] for the same
+    reason as after_classify: it is a run-wide accumulator, not this node's."""
+    if state["risk"] is None:
         return END
     return "route"
