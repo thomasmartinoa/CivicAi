@@ -1957,3 +1957,42 @@ soft failure such as a geocoding timeout is still assigned."
 - [ ] `tests/test_import_rules.py` still passes — `app/api/` reaches the graph only through `runner`
 
 **Next:** Phase 1c — API wiring, WebSocket streaming of `astream` updates, LangSmith tracing, and the SLA monitor port.
+
+---
+
+## Carried forward into Phase 1c
+
+**Must handle when the API layer lands**
+- `_media_to_prompt_vars` resolves `Path(settings.upload_dir)` relative to the process
+  CWD when `upload_dir` is relative. Containment against traversal is now in place, but
+  CWD-independence is not. Anchor it when the upload endpoint is written.
+- The `.name`-flattening in that same function assumes `ComplaintMedia.file_path` never
+  contains a subdirectory. Nothing writes that column yet. Re-check when the upload
+  endpoint does, and make it store a generated name, never a client-supplied one.
+- Complaint creation must resolve a tenant. `route_node` now fails loudly on a
+  tenant-less complaint rather than routing it to an arbitrary tenant.
+
+**Failure paths with no in-database trace**
+- A node that raises (`route_node`, `work_order_node` have no `try/except`) propagates
+  out of `ainvoke` past `persist_result`, so the complaint stays `submitted` with no
+  `AgentRun` recording the attempt. Correct for resume — the checkpoint holds — but under
+  background execution there is no trace at all. Consider writing an
+  `AgentRun(status="failed")` before re-raising.
+- A failed notification is never retried. The `SENT_SUMMARY` guard correctly permits one,
+  but nothing calls the node again: the thread completes and `_advance` short-circuits
+  every later invocation. Needs a re-drive path — a `retry_notification(complaint_id)`
+  or a sweep over `AgentRun.error LIKE 'notify:%'`.
+
+**Accepted as-is**
+- `GraphDeps.session_factory` is typed `Callable | None` rather than
+  `Callable[[], Session] | None`, to avoid importing `Session` into `app/ai`. The
+  docstring carries the load-bearing part (ownership).
+- The bcrypt cost-factor fixture lowers hashing rounds for all tests. Production is
+  untouched; a future test asserting the production cost factor would silently pass.
+- `AgentStep.seq` is now complaint-global but has no uniqueness constraint and no reader
+  outside the tests. Revisit when the trace viewer is built.
+
+**Rate-limit note**
+- `llm_requests_per_second = 0.5` was chosen without measuring Gemini's actual free-tier
+  RPM, and chain-level retries now stack with the client's `max_retries`. Measure before
+  the live demo: one complaint through ~5 LLM nodes spends 10s+ in the limiter alone.
