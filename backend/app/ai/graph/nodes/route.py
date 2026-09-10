@@ -57,18 +57,22 @@ def route_node(state: ComplaintState, config: RunnableConfig) -> dict:
     district = state["location"].district if state["location"] else None
     tenant_id = state["tenant_id"]
 
+    if not tenant_id:
+        # Skipping the filter would span every tenant and route the complaint to
+        # whichever one happens to list the category first.
+        return {
+            "errors": ["route: complaint has no tenant_id"],
+            "decision_log": [NodeDecision(node="route", summary="failed: no tenant_id")],
+        }
+
     session = deps_from_config(config).require("session_factory")()
     try:
-        departments = session.query(Department)
-        if tenant_id:
-            departments = departments.filter(Department.tenant_id == tenant_id)
+        departments = session.query(Department).filter(Department.tenant_id == tenant_id)
         department = next(
             (d for d in departments.all() if category.value in (d.categories or [])), None
         )
 
-        contractors = session.query(Contractor)
-        if tenant_id:
-            contractors = contractors.filter(Contractor.tenant_id == tenant_id)
+        contractors = session.query(Contractor).filter(Contractor.tenant_id == tenant_id)
         ranked = sorted(
             contractors.all(), key=lambda c: score_contractor(c, category, district), reverse=True
         )

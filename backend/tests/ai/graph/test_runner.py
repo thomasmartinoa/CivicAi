@@ -20,10 +20,16 @@ from tests.ai.graph.conftest import raises, returns
 
 @pytest.fixture
 def env(db_session):
-    """A seeded database plus a complaint ready to process."""
-    seed_database(db_session)
+    """A seeded database plus a complaint ready to process.
+
+    Assigned to the seeded tenant: route_node treats a missing tenant_id as an
+    error (an unscoped query would span every tenant), and a complaint with no
+    tenant_id is exactly the shape this fixture used to produce.
+    """
+    seeded = seed_database(db_session)
     complaint = Complaint(
         tracking_id="CIV-RUNNER01",
+        tenant_id=seeded["tenant_id"],
         citizen_email="a@b.com",
         description="There is a large pothole on the main road near the school gate",
     )
@@ -242,6 +248,23 @@ async def test_a_failed_persist_is_retried_on_the_next_run(env, monkeypatch):
     session.expire_all()
     assert session.query(AgentRun).count() == 1, "the retry did not persist"
     assert session.query(Complaint).one().status == "assigned"
+
+
+async def test_a_tenant_less_complaint_fails_routing_instead_of_spanning_every_tenant(env):
+    """Complaint.tenant_id is nullable and route_node used to treat None as 'no
+    filter', so the query spanned every tenant and the complaint was routed to
+    whichever tenant's department happened to list the category first."""
+    session, complaint = env
+    complaint.tenant_id = None
+    session.commit()
+
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    run = session.query(AgentRun).one()
+    assert "route: complaint has no tenant_id" in run.error
+    order = session.query(WorkOrder).one()
+    assert order.contractor_id is None
 
 
 def test_a_traversal_path_raises_rather_than_reading(tmp_path, monkeypatch):
