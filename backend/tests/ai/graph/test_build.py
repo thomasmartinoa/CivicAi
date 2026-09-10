@@ -47,7 +47,11 @@ def test_graph_version_is_recorded():
 
 
 def test_llm_nodes_carry_a_retry_policy():
-    """A transient 503 killed a v1 complaint outright."""
+    """RetryPolicy only fires when a node raises. Every LLM node catches its own
+    chain's exceptions and returns an `errors` update instead, so this policy
+    never covers a transient provider failure -- that retry lives inside the
+    chain itself (see build_structured). This policy is kept because it is
+    harmless and still covers a node raising for some other reason."""
     builder = build_graph()
     for name in ("validate", "classify", "assess_risk", "analyse_media"):
         assert builder.nodes[name].retry_policy, f"{name} has no retry policy"

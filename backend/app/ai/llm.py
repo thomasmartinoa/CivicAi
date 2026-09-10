@@ -60,13 +60,17 @@ TASK_MODEL: dict[Task, str] = {
 # `settings` at import time, so monkeypatching `settings.llm_requests_per_second`
 # after import has no effect on it.
 #
-# NOTE — retry/rate-limit interaction: `_build_one` sets `max_retries=3` on the
-# Gemini client, and the planned per-node `RetryPolicy(max_attempts=3)` in the
-# graph sits on top of that — up to 9 calls for a single node, each queued
-# behind this one shared 0.5 rps bucket. That value is tuned for Phase 3's
-# eval sweep, not for a live demo: a single complaint passing through ~5 LLM
-# nodes can spend 10s+ just waiting in this limiter. Re-check this against
-# the actual Gemini free-tier RPM before any live demo.
+# NOTE — retry/rate-limit interaction: every LLM node catches its own chain's
+# exceptions and returns an `errors` update instead of raising, so the graph's
+# per-node `RetryPolicy(max_attempts=3)` can never fire for a chain failure —
+# it only covers a node raising for some other reason. The retry that actually
+# matters lives on the chain itself, via `.with_retry(stop_after_attempt=3)` in
+# `build_structured` below. That stacks with `max_retries=3` on the Gemini
+# client, so a single call can retry up to 9 times, each attempt queued behind
+# this one shared 0.5 rps bucket. That value is tuned for Phase 3's eval sweep,
+# not for a live demo: a single complaint passing through ~5 LLM nodes can
+# spend well over 10s waiting in this limiter across retries. Re-check this
+# against the actual Gemini free-tier RPM before any live demo.
 SHARED_RATE_LIMITER = InMemoryRateLimiter(
     requests_per_second=settings.llm_requests_per_second,
     check_every_n_seconds=0.1,
@@ -144,4 +148,6 @@ def build_structured(
     nodes never touch a raw model.
     """
     model = build_chat_model(task)
-    return get_prompt(prompt_name, prompt_version) | model.with_structured_output(schema)
+    return get_prompt(prompt_name, prompt_version) | model.with_structured_output(
+        schema
+    ).with_retry(stop_after_attempt=3)

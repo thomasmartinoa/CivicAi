@@ -90,6 +90,35 @@ def test_build_structured_composes_prompt_model_and_fallbacks(monkeypatch):
     assert result.category is Category.ROADS
 
 
+def test_build_structured_retries_a_failing_chain(monkeypatch):
+    """RetryPolicy only fires when a node raises, and every LLM node catches its
+    own exception -- so the retry has to live inside the chain."""
+    attempts = {"n": 0}
+
+    class _Flaky(GenericFakeChatModel):
+        def with_structured_output(self, schema, **kwargs) -> Runnable:
+            def run(_):
+                attempts["n"] += 1
+                if attempts["n"] < 3:
+                    raise RuntimeError("503 transient")
+                return ClassificationResult(category="ROADS", confidence=0.9)
+            return RunnableLambda(run)
+
+    monkeypatch.setattr(llm_module.settings, "gemini_api_key", "x")
+    monkeypatch.setattr(llm_module.settings, "ollama_enabled", False)
+    monkeypatch.setattr(llm_module, "_build_one",
+                        lambda p, t: _Flaky(messages=iter([AIMessage(content="{}")])))
+    # with_retry's default backoff is real exponential-jitter sleep (tenacity's
+    # nap.sleep, which calls time.sleep) -- several real seconds for 3 attempts.
+    # Skip the wait; this test is about attempt count, not backoff timing.
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    chain = build_structured(Task.CLASSIFY, ClassificationResult, "classify")
+    result = chain.invoke({"description": "pothole", "media_context": ""})
+    assert attempts["n"] == 3
+    assert result.category is Category.ROADS
+
+
 def test_fake_models_cannot_do_structured_output():
     """Documents WHY the injection seam above exists, so nobody 'simplifies' it."""
     fake = GenericFakeChatModel(messages=iter([AIMessage(content="{}")]))
