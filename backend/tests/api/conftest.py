@@ -18,9 +18,10 @@ def client(db_session, tmp_path, monkeypatch):
 
     secret_key is set to a real value the same way test_health.py's own
     `client` fixture does: `with TestClient(app) as c` runs lifespan startup
-    for real, and main.py's FIX 7 guard refuses to boot with the placeholder
-    SECRET_KEY while ENVIRONMENT=production — the ambient default here, since
-    there is no backend/.env in this repo.
+    for real, and main.py's `_guard_against_placeholder_secret_in_production`
+    refuses to boot with the placeholder SECRET_KEY while
+    ENVIRONMENT=production — the ambient default here, since there is no
+    backend/.env in this repo.
     """
     from app.db.session import get_db
     from app.services import media as media_module
@@ -34,5 +35,6 @@ def client(db_session, tmp_path, monkeypatch):
                         lambda complaint_id: captured.append(complaint_id))
     with TestClient(app) as c:
         c.captured_runs = captured
+        c.upload_root = tmp_path
         yield c
     app.dependency_overrides.clear()

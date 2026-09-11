@@ -8,6 +8,7 @@ Phase 1b's checkpointer and this phase's resume sweep supply.
 
 import secrets
 import string
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -16,13 +17,17 @@ from sqlalchemy.orm import Session
 from app.db.models.complaint import Complaint, ComplaintMedia
 from app.db.session import get_db
 from app.schemas.complaint import ComplaintDetail, ComplaintSubmitted
+from app.services import media as media_module
 from app.services.execution import schedule_complaint_run
-from app.services.media import MediaTooLarge, MediaTypeNotAllowed, store_upload
+from app.services.media import (
+    MAX_UPLOAD_BYTES, MediaTooLarge, MediaTypeNotAllowed, StoredMedia, store_upload,
+)
 from app.services.tenancy import NoTenantConfigured, resolve_tenant_id
 
 router = APIRouter(prefix="/complaints", tags=["complaints"])
 
 _ALPHABET = string.ascii_uppercase + string.digits
+_CHUNK = 64 * 1024
 MIN_DESCRIPTION = 10
 
 
@@ -30,6 +35,23 @@ def generate_tracking_id() -> str:
     """Random, not sequential: a tracking id is the only credential for reading
     a complaint, so it must not be guessable from a neighbouring one."""
     return "CIV-" + "".join(secrets.choice(_ALPHABET) for _ in range(8))
+
+
+async def _read_bounded(upload: UploadFile, limit: int) -> bytes:
+    """Read at most `limit` bytes, then stop.
+
+    `await upload.read()` with no argument buffers the whole body before
+    store_upload can reject it on size — which on a public endpoint means a
+    client chooses how much memory we allocate.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await upload.read(_CHUNK):
+        total += len(chunk)
+        if total > limit:
+            raise MediaTooLarge(f"upload exceeds the {limit} byte limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=ComplaintSubmitted)
@@ -58,12 +80,17 @@ async def submit_complaint(
     except NoTenantConfigured as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    stored = []
-    for upload in files:
-        try:
-            stored.append(store_upload(await upload.read(), upload.filename or "upload"))
-        except (MediaTypeNotAllowed, MediaTooLarge) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    stored: list[StoredMedia] = []
+    try:
+        for upload in files:
+            data = await _read_bounded(upload, MAX_UPLOAD_BYTES)
+            stored.append(store_upload(data, upload.filename or "upload"))
+    except (MediaTypeNotAllowed, MediaTooLarge) as exc:
+        # Files accepted earlier in this batch are already on disk and no
+        # complaint will reference them. Remove them rather than leaking.
+        for item in stored:
+            (media_module.UPLOAD_ROOT / Path(item.file_path).name).unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     complaint = Complaint(
         tracking_id=generate_tracking_id(),

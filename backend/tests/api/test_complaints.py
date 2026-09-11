@@ -1,5 +1,9 @@
+import asyncio
+
+from app.api.complaints import _CHUNK, _read_bounded
 from app.db.models.complaint import Complaint, ComplaintMedia
 from app.db.models.core import Tenant
+from app.services.media import MAX_UPLOAD_BYTES, MediaTooLarge
 
 
 def _form(**over):
@@ -104,3 +108,29 @@ def test_an_empty_string_tenant_id_still_fails_closed_when_ambiguous(client, db_
 
     response = client.post("/complaints/", data=_form(tenant_id=""))
     assert response.status_code == 400
+
+
+def test_an_oversized_upload_is_rejected(client):
+    """The read is bounded: a client must not be able to choose how much memory
+    we allocate on a public endpoint."""
+    response = client.post(
+        "/complaints/", data=_form(),
+        files=[("files", ("big.jpg", b"x" * (MAX_UPLOAD_BYTES + 1024), "image/jpeg"))],
+    )
+    assert response.status_code == 400
+
+
+def test_a_rejected_batch_leaves_no_orphaned_files(client, db_session):
+    """A later file failing must not leave the earlier ones on disk with nothing
+    referencing them."""
+    response = client.post(
+        "/complaints/", data=_form(),
+        files=[
+            ("files", ("good.jpg", b"fake-jpeg", "image/jpeg")),
+            ("files", ("payload.exe", b"MZ", "application/octet-stream")),
+        ],
+    )
+    assert response.status_code == 400
+    assert db_session.query(Complaint).count() == 0
+    assert db_session.query(ComplaintMedia).count() == 0
+    assert list(client.upload_root.iterdir()) == [], "the accepted file was left behind"
