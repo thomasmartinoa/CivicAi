@@ -11,7 +11,7 @@ import string
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 
 from app.db.models.complaint import Complaint, ComplaintMedia
@@ -128,3 +128,16 @@ async def track_complaint(tracking_id: str, db: Session = Depends(get_db)) -> Co
     if complaint is None:
         raise HTTPException(status_code=404, detail="Complaint not found")
     return complaint
+
+
+@router.websocket("/ws/{tracking_id}")
+async def complaint_updates(websocket: WebSocket, tracking_id: str) -> None:
+    from app.services.streaming import registry
+
+    await websocket.accept()
+    registry.connect(tracking_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        registry.disconnect(tracking_id, websocket)

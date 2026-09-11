@@ -265,12 +265,46 @@ async def _advance(graph, state: ComplaintState, config) -> tuple[ComplaintState
     return snapshot.values, False
 
 
+async def _advance_streaming(
+    graph,
+    state: ComplaintState,
+    config,
+    on_update: Callable[[str, dict], object],
+) -> tuple[ComplaintState, bool]:
+    """Stream graph progress via on_update callback, mirroring _advance's three-way decision.
+
+    When the thread is already complete, yields zero chunks (consistent with astream
+    on a finished thread), so ran is False and the caller skips persistence.
+    """
+    snapshot = await graph.aget_state(config)
+    if snapshot.created_at is None:
+        graph_input = state
+    elif snapshot.next:
+        graph_input = None
+    else:
+        # Thread already completed; astream yields zero chunks and we return stored state
+        return snapshot.values, False
+
+    # Stream the run and collect updates
+    result = None
+    async for chunk in graph.astream(graph_input, config, stream_mode="updates"):
+        # chunk is {node: update_dict}
+        for node, update in chunk.items():
+            await on_update(node, update)
+        result = update  # Keep the last update for now
+
+    # Read the final state from the checkpoint
+    final = await graph.aget_state(config)
+    return final.values, True
+
+
 async def run_complaint(
     complaint_id: str,
     *,
     session_factory: Callable,
     deps: GraphDeps | None = None,
     checkpointer=None,
+    on_update: Callable[[str, dict], object] | None = None,
 ) -> ComplaintState:
     """Run one complaint through the graph and persist what happened.
 
@@ -281,6 +315,9 @@ async def run_complaint(
     every path, including on error, which expunges its identity map — so a
     caller holding ORM objects across this call must re-query them afterwards
     rather than reuse the instances it passed in.
+
+    When `on_update` is supplied, the run streams via astream instead of invoking,
+    calling on_update(node, update) for each node's updates.
     """
     from app.db.models.ai import AgentRun
     from app.db.models.complaint import Complaint
@@ -296,7 +333,10 @@ async def run_complaint(
         try:
             if checkpointer is not None:
                 graph = compile_graph(checkpointer=checkpointer)
-                result, ran = await _advance(graph, state, config)
+                if on_update is None:
+                    result, ran = await _advance(graph, state, config)
+                else:
+                    result, ran = await _advance_streaming(graph, state, config, on_update)
             else:
                 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -305,7 +345,10 @@ async def run_complaint(
                     # checkpoint as plain dicts and every later field access fails.
                     saver.serde = build_serializer()
                     graph = compile_graph(checkpointer=saver)
-                    result, ran = await _advance(graph, state, config)
+                    if on_update is None:
+                        result, ran = await _advance(graph, state, config)
+                    else:
+                        result, ran = await _advance_streaming(graph, state, config, on_update)
             duration_ms = int((time.monotonic() - started) * 1000)
 
             # The checkpoint and the database are separate stores. A previous invocation

@@ -37,12 +37,37 @@ def _spawn(coro) -> None:
     task.add_done_callback(_background_tasks.discard)
 
 
+async def _publish_progress(tracking_id: str, node: str, update: dict) -> None:
+    """Publish graph progress as a node update with a human summary for the citizen."""
+    from app.services.streaming import registry
+
+    decisions = update.get("decision_log") or []
+    await registry.publish(tracking_id, {
+        "node": node,
+        "summary": decisions[-1].summary if decisions else None,
+    })
+
+
 async def _run_one(complaint_id: str) -> None:
     """Execute one complaint through the graph. Logs exceptions without propagating."""
     from app.ai.graph.runner import run_complaint
+    from app.db.models.complaint import Complaint
+
+    # Query the tracking id in a separate session
+    session = SessionLocal()
+    try:
+        complaint = session.query(Complaint).filter(Complaint.id == complaint_id).one_or_none()
+        tracking_id = complaint.tracking_id if complaint else None
+    finally:
+        session.close()
+
+    # Create a callback that publishes to the tracking id if available
+    async def on_update(node: str, update: dict) -> None:
+        if tracking_id:
+            await _publish_progress(tracking_id, node, update)
 
     try:
-        await run_complaint(complaint_id, session_factory=SessionLocal)
+        await run_complaint(complaint_id, session_factory=SessionLocal, on_update=on_update)
     except Exception:
         logger.exception("complaint run failed for %s", complaint_id)
 
