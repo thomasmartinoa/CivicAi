@@ -306,12 +306,31 @@ async def run_complaint(
                     saver.serde = build_serializer()
                     graph = compile_graph(checkpointer=saver)
                     result, ran = await _advance(graph, state, config)
+            duration_ms = int((time.monotonic() - started) * 1000)
+
+            # The checkpoint and the database are separate stores. A previous invocation
+            # may have completed the graph and then failed to persist, so "the thread is
+            # finished" is not evidence that the results were written. Ask the database.
+            # Only skip persistence if a successful run was already recorded; a failed
+            # run means persistence was never attempted or failed, so retry it.
+            already_persisted = (
+                session.query(AgentRun)
+                .filter(AgentRun.complaint_id == complaint_id, AgentRun.status != "failed")
+                .count() > 0
+            )
+            if ran or not already_persisted:
+                persist_result(result, session, duration_ms=duration_ms)
+            return result
         except Exception as exc:
             # Without this the complaint stays 'submitted' with nothing recording that
             # anything was attempted. The checkpoint survives, so a resume can still
             # pick it up — but under background execution the failure is otherwise
-            # invisible in the database.
+            # invisible in the database. This trap covers both node failures and
+            # persistence failures; the latter are recoverable (the sweep re-finds the
+            # complaint and persist_result idempotency handles replay), so the value
+            # here is the audit trail, not recovery.
             duration_ms = int((time.monotonic() - started) * 1000)
+            session.rollback()
             session.add(AgentRun(
                 complaint_id=complaint_id,
                 thread_id=complaint_id,
@@ -323,16 +342,5 @@ async def run_complaint(
             ))
             session.commit()
             raise
-        duration_ms = int((time.monotonic() - started) * 1000)
-
-        # The checkpoint and the database are separate stores. A previous invocation
-        # may have completed the graph and then failed to persist, so "the thread is
-        # finished" is not evidence that the results were written. Ask the database.
-        already_persisted = (
-            session.query(AgentRun).filter(AgentRun.complaint_id == complaint_id).count() > 0
-        )
-        if ran or not already_persisted:
-            persist_result(result, session, duration_ms=duration_ms)
-        return result
     finally:
         session.close()

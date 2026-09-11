@@ -220,7 +220,8 @@ async def test_a_completed_run_is_not_re_executed(env):
 
 async def test_a_failed_persist_is_retried_on_the_next_run(env, monkeypatch):
     """The checkpoint and the database are separate stores. A completed thread
-    whose persistence failed must not be short-circuited forever."""
+    whose persistence failed must not be short-circuited forever. A failure to
+    persist leaves a failed AgentRun recording that something was attempted."""
     session, complaint = env
     deps = _deps(session_factory=lambda: session)
     saver = InMemorySaver()
@@ -239,14 +240,23 @@ async def test_a_failed_persist_is_retried_on_the_next_run(env, monkeypatch):
 
     session.rollback()
     session.expire_all()
-    assert session.query(AgentRun).count() == 0, "nothing should have persisted"
+    # A failure during persistence now leaves a failed AgentRun recording the
+    # attempt, so the failure is visible in the database rather than invisible.
+    # This is recoverable: persist_result is idempotent and the sweep finds it again.
+    failed_run = session.query(AgentRun).one()
+    assert failed_run.status == "failed"
+    assert "commit failed" in failed_run.error
+    initial_run_id = failed_run.id
 
     monkeypatch.setattr(runner_module, "persist_result", real_persist)
     await run_complaint(complaint.id, session_factory=lambda: session,
                         deps=deps, checkpointer=saver)
 
     session.expire_all()
-    assert session.query(AgentRun).count() == 1, "the retry did not persist"
+    # Two runs total: the failed one from persistence, plus the successful retry.
+    assert session.query(AgentRun).count() == 2, "the retry should add a new run"
+    final_run = session.query(AgentRun).filter(AgentRun.id != initial_run_id).one()
+    assert final_run.status == "completed"
     assert session.query(Complaint).one().status == "assigned"
 
 
