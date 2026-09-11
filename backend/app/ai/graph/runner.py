@@ -293,18 +293,36 @@ async def run_complaint(
         config = to_configurable(deps, thread_id=complaint_id)
 
         started = time.monotonic()
-        if checkpointer is not None:
-            graph = compile_graph(checkpointer=checkpointer)
-            result, ran = await _advance(graph, state, config)
-        else:
-            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
-            async with AsyncSqliteSaver.from_conn_string(CHECKPOINT_DB) as saver:
-                # Without this, Pydantic models in state come back from the
-                # checkpoint as plain dicts and every later field access fails.
-                saver.serde = build_serializer()
-                graph = compile_graph(checkpointer=saver)
+        try:
+            if checkpointer is not None:
+                graph = compile_graph(checkpointer=checkpointer)
                 result, ran = await _advance(graph, state, config)
+            else:
+                from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+                async with AsyncSqliteSaver.from_conn_string(CHECKPOINT_DB) as saver:
+                    # Without this, Pydantic models in state come back from the
+                    # checkpoint as plain dicts and every later field access fails.
+                    saver.serde = build_serializer()
+                    graph = compile_graph(checkpointer=saver)
+                    result, ran = await _advance(graph, state, config)
+        except Exception as exc:
+            # Without this the complaint stays 'submitted' with nothing recording that
+            # anything was attempted. The checkpoint survives, so a resume can still
+            # pick it up — but under background execution the failure is otherwise
+            # invisible in the database.
+            duration_ms = int((time.monotonic() - started) * 1000)
+            session.add(AgentRun(
+                complaint_id=complaint_id,
+                thread_id=complaint_id,
+                status="failed",
+                graph_version=GRAPH_VERSION,
+                finished_at=utcnow(),
+                duration_ms=duration_ms,
+                error=f"{type(exc).__name__}: {exc}",
+            ))
+            session.commit()
+            raise
         duration_ms = int((time.monotonic() - started) * 1000)
 
         # The checkpoint and the database are separate stores. A previous invocation

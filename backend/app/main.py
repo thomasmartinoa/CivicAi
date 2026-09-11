@@ -31,8 +31,20 @@ def _guard_against_placeholder_secret_in_production() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import logging
+
+    logger = logging.getLogger(__name__)
     _guard_against_placeholder_secret_in_production()
-    # Otherwise empty for now — Phase 1 adds the scheduler here.
+
+    from app.services.execution import resume_incomplete_runs, schedule_complaint_run
+
+    try:
+        for complaint_id in resume_incomplete_runs():
+            logger.info("resuming interrupted complaint %s", complaint_id)
+            schedule_complaint_run(complaint_id)
+    except Exception:
+        logger.exception("startup resume sweep failed; continuing anyway")
+
     yield
 
 
