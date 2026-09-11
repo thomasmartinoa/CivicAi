@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import system
+from app.api import complaints, system
 from app.config import settings
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -52,6 +52,7 @@ app.add_middleware(
 )
 
 app.include_router(system.router)
+app.include_router(complaints.router)
 
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
