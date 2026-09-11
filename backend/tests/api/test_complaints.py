@@ -1,4 +1,4 @@
-import asyncio
+import pytest
 
 from app.api.complaints import _CHUNK, _read_bounded
 from app.db.models.complaint import Complaint, ComplaintMedia
@@ -134,3 +134,45 @@ def test_a_rejected_batch_leaves_no_orphaned_files(client, db_session):
     assert db_session.query(Complaint).count() == 0
     assert db_session.query(ComplaintMedia).count() == 0
     assert list(client.upload_root.iterdir()) == [], "the accepted file was left behind"
+
+
+async def test_read_bounded_stops_without_buffering_the_whole_stream():
+    """The bound is the only thing standing between a public endpoint and a
+    client-chosen memory allocation, and the 400-response test above passes with
+    or without it — store_upload catches the size either way. This is what would
+    actually fail if _read_bounded were reverted to an unbounded read.
+    """
+    class _Stream:
+        """Counts what was actually consumed."""
+
+        def __init__(self, total: int) -> None:
+            self.remaining = total
+            self.consumed = 0
+
+        async def read(self, size: int) -> bytes:
+            take = min(size, self.remaining)
+            self.remaining -= take
+            self.consumed += take
+            return b"x" * take
+
+    stream = _Stream(MAX_UPLOAD_BYTES * 4)
+    with pytest.raises(MediaTooLarge):
+        await _read_bounded(stream, MAX_UPLOAD_BYTES)
+
+    assert stream.consumed <= MAX_UPLOAD_BYTES + 65536, (
+        f"read {stream.consumed} bytes for a {MAX_UPLOAD_BYTES} byte limit — "
+        "the read is not bounded"
+    )
+
+
+async def test_read_bounded_accepts_exactly_the_limit():
+    class _Exact:
+        def __init__(self) -> None:
+            self.remaining = MAX_UPLOAD_BYTES
+
+        async def read(self, size: int) -> bytes:
+            take = min(size, self.remaining)
+            self.remaining -= take
+            return b"x" * take
+
+    assert len(await _read_bounded(_Exact(), MAX_UPLOAD_BYTES)) == MAX_UPLOAD_BYTES
