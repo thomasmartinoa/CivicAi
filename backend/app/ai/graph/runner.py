@@ -21,12 +21,26 @@ from app.db.base import utcnow
 CHECKPOINT_DB = str(Path(__file__).resolve().parents[3] / "checkpoints.db")
 
 
-def build_deps(session_factory: Callable) -> GraphDeps:
-    """Wire the real chains. Tests pass their own GraphDeps instead."""
+def build_deps(session_factory: Callable, complaint=None) -> GraphDeps:
+    """Wire the real chains. Tests pass their own GraphDeps instead.
+
+    When complaint is provided, wraps notify_citizen in a closure over the
+    complaint's email address, since the notify node doesn't know the recipient.
+    """
     from app.ai.llm import Task, build_structured
     from app.ai.schemas import ClassificationResult, RiskAssessment, ValidationResult, VisionObservation
     from app.services.geocoding import reverse_geocode
     from app.services.notify import notify_citizen
+
+    # If complaint is provided, create a wrapper that injects the recipient
+    if complaint is not None:
+        complaint_email = complaint.citizen_email
+        def notify(**kwargs):
+            notify_citizen(recipient=complaint_email, session_factory=session_factory, **kwargs)
+        notify_impl = notify
+    else:
+        # Fallback for tests that don't pass a complaint
+        notify_impl = notify_citizen
 
     return GraphDeps(
         validate_chain=build_structured(Task.VALIDATE, ValidationResult, "validate"),
@@ -35,7 +49,7 @@ def build_deps(session_factory: Callable) -> GraphDeps:
         vision_chain=_lazy_vision_chain(),
         session_factory=session_factory,
         geocode=reverse_geocode,
-        notify=notify_citizen,
+        notify=notify_impl,
     )
 
 
@@ -326,7 +340,7 @@ async def run_complaint(
     try:
         complaint = session.query(Complaint).filter(Complaint.id == complaint_id).one()
         state = _state_for(complaint)
-        deps = deps or build_deps(session_factory)
+        deps = deps or build_deps(session_factory, complaint=complaint)
         config = to_configurable(deps, thread_id=complaint_id)
 
         started = time.monotonic()
