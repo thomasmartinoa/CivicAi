@@ -1,3 +1,6 @@
+import pytest
+from sqlalchemy.exc import IntegrityError
+
 from app.db.models.complaint import Complaint
 from app.db.models.core import Tenant
 from app.db.models.workflow import Notification
@@ -55,3 +58,18 @@ def test_the_same_notification_twice_records_once(db_session, monkeypatch):
                        category="ROADS", status="assigned", recipient="a@b.com",
                        session_factory=lambda: db_session)
     assert db_session.query(Notification).count() == 1
+
+
+def test_a_non_dedupe_integrity_error_propagates(db_session, monkeypatch):
+    """A foreign key or other constraint failure must not be mistaken for a
+    dedupe collision and silently swallowed. Only dedupe_key violations are
+    expected and safe to ignore."""
+    complaint = _complaint(db_session)
+    monkeypatch.setattr("app.services.notify._send_email", lambda *a, **k: None)
+
+    # Pass a non-existent complaint_id to trigger a foreign key violation
+    # (foreign keys are enforced in tests via PRAGMA foreign_keys=ON)
+    with pytest.raises(IntegrityError):
+        notify_citizen(tracking_id="CIV-FAKE", complaint_id="nonexistent_id",
+                       category="ROADS", status="assigned", recipient="a@b.com",
+                       session_factory=lambda: db_session)

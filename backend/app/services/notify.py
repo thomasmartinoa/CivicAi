@@ -69,7 +69,12 @@ def notify_citizen(
             dedupe_key=f"{complaint_id}:status_update:{status}",
         ))
         session.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
+        # Only the dedupe collision is expected here. Anything else is a real
+        # constraint failure that must surface, not be mistaken for "already sent".
+        if "dedupe_key" not in str(exc.orig):
+            session.rollback()
+            raise
         # dedupe_key is unique: this exact notification was already recorded.
         session.rollback()
     finally:
