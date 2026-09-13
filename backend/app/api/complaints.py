@@ -140,4 +140,10 @@ async def complaint_updates(websocket: WebSocket, tracking_id: str) -> None:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
+        # Every exit path deregisters, not only the clean one. A transport
+        # error or a cancellation at shutdown must not leave a subscriber
+        # behind — the registry only prunes dead sockets when it next
+        # publishes, and a finished complaint never publishes again.
         registry.disconnect(tracking_id, websocket)
