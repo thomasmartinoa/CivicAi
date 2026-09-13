@@ -8,8 +8,10 @@ warnings every five minutes for hours.
 
 import logging
 import smtplib
+import ssl
 from collections.abc import Callable
 from email.message import EmailMessage
+from ipaddress import ip_address
 
 from sqlalchemy.exc import IntegrityError
 
@@ -19,6 +21,18 @@ from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
 
+_LOOPBACK_HOSTS = {"localhost"}
+
+
+def _is_loopback(host: str) -> bool:
+    """Check if a host is a loopback address (localhost or 127.0.0.1/::1)."""
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
 
 def _send_email(recipient: str, subject: str, body: str) -> None:
     message = EmailMessage()
@@ -27,6 +41,10 @@ def _send_email(recipient: str, subject: str, body: str) -> None:
     message["Subject"] = subject
     message.set_content(body)
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
+        # Credentials must never cross the network unencrypted. Loopback is the
+        # one exception, so the MailHog dev relay on localhost:1025 keeps working.
+        if not _is_loopback(settings.smtp_host):
+            server.starttls(context=ssl.create_default_context())
         if settings.smtp_user:
             server.login(settings.smtp_user, settings.smtp_password)
         server.send_message(message)

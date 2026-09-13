@@ -73,3 +73,81 @@ def test_a_non_dedupe_integrity_error_propagates(db_session, monkeypatch):
         notify_citizen(tracking_id="CIV-FAKE", complaint_id="nonexistent_id",
                        category="ROADS", status="assigned", recipient="a@b.com",
                        session_factory=lambda: db_session)
+
+
+def test_starttls_not_called_on_loopback(monkeypatch):
+    """Development relay on localhost:1025 (MailHog) doesn't support TLS.
+    Credentials sent over loopback are safe from network eavesdropping."""
+    from app.services.notify import _send_email
+
+    call_log = []
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            self.host = host
+            self.port = port
+
+        def starttls(self, context=None):
+            call_log.append("starttls")
+
+        def login(self, user, password):
+            call_log.append("login")
+
+        def send_message(self, msg):
+            call_log.append("send_message")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr("app.services.notify.smtplib.SMTP", FakeSMTP)
+    monkeypatch.setattr("app.config.settings.smtp_host", "localhost")
+    monkeypatch.setattr("app.config.settings.smtp_port", 1025)
+    monkeypatch.setattr("app.config.settings.smtp_user", "user")
+    monkeypatch.setattr("app.config.settings.smtp_password", "pass")
+
+    _send_email("test@example.com", "subject", "body")
+
+    # starttls should NOT be called for localhost
+    assert "starttls" not in call_log
+    assert call_log == ["login", "send_message"]
+
+
+def test_starttls_called_before_login_on_remote_host(monkeypatch):
+    """Remote SMTP hosts must negotiate TLS before credentials are sent."""
+    from app.services.notify import _send_email
+
+    call_log = []
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            self.host = host
+            self.port = port
+
+        def starttls(self, context=None):
+            call_log.append("starttls")
+
+        def login(self, user, password):
+            call_log.append("login")
+
+        def send_message(self, msg):
+            call_log.append("send_message")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr("app.services.notify.smtplib.SMTP", FakeSMTP)
+    monkeypatch.setattr("app.config.settings.smtp_host", "smtp.example.com")
+    monkeypatch.setattr("app.config.settings.smtp_port", 587)
+    monkeypatch.setattr("app.config.settings.smtp_user", "user")
+    monkeypatch.setattr("app.config.settings.smtp_password", "pass")
+
+    _send_email("test@example.com", "subject", "body")
+
+    # starttls must be called before login
+    assert call_log == ["starttls", "login", "send_message"]
