@@ -68,32 +68,52 @@ def notify_citizen(
         f"Status: {status}\n"
     )
 
-    sent = False
-    try:
-        _send_email(recipient, subject, body)
-        sent = True
-    except Exception:
-        logger.warning("notification send failed for %s", tracking_id, exc_info=True)
+    dedupe_key = f"{complaint_id}:status_update:{status}"
 
+    # Check before sending: if this notification was already sent, skip it entirely
     session = session_factory()
     try:
-        session.add(Notification(
-            complaint_id=complaint_id,
-            recipient_email=recipient,
-            notification_type="status_update",
-            message=subject,
-            is_sent=sent,
-            sent_at=utcnow() if sent else None,
-            dedupe_key=f"{complaint_id}:status_update:{status}",
-        ))
-        session.commit()
+        existing = session.query(Notification).filter(
+            Notification.dedupe_key == dedupe_key
+        ).one_or_none()
+
+        if existing and existing.is_sent:
+            # Already sent successfully; do not email again
+            return
+
+        # Either no record exists, or a previous attempt failed. Try sending.
+        sent = False
+        try:
+            _send_email(recipient, subject, body)
+            sent = True
+        except Exception:
+            logger.warning("notification send failed for %s", tracking_id, exc_info=True)
+
+        if existing:
+            # Update the existing failed attempt with the new outcome
+            existing.is_sent = sent
+            existing.sent_at = utcnow() if sent else None
+            session.commit()
+        else:
+            # Insert a new record
+            session.add(Notification(
+                complaint_id=complaint_id,
+                recipient_email=recipient,
+                notification_type="status_update",
+                message=subject,
+                is_sent=sent,
+                sent_at=utcnow() if sent else None,
+                dedupe_key=dedupe_key,
+            ))
+            session.commit()
     except IntegrityError as exc:
         # Only the dedupe collision is expected here. Anything else is a real
         # constraint failure that must surface, not be mistaken for "already sent".
         if "dedupe_key" not in str(exc.orig):
             session.rollback()
             raise
-        # dedupe_key is unique: this exact notification was already recorded.
+        # Race: another process inserted this key between our check and our insert.
+        # That's fine — the other process will send (or already sent), so we're done.
         session.rollback()
     finally:
         session.close()

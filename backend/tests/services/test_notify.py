@@ -50,14 +50,51 @@ def test_a_successful_send_is_recorded_as_sent(db_session, monkeypatch):
 
 def test_the_same_notification_twice_records_once(db_session, monkeypatch):
     """notifications.dedupe_key is unique — Phase 0 added it because v1 re-sent
-    SLA warnings every five minutes."""
+    SLA warnings every five minutes. The second call should not send an email."""
     complaint = _complaint(db_session)
-    monkeypatch.setattr("app.services.notify._send_email", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr("app.services.notify._send_email",
+                       lambda *a, **k: calls.append(1))
     for _ in range(2):
         notify_citizen(tracking_id=complaint.tracking_id, complaint_id=complaint.id,
                        category="ROADS", status="assigned", recipient="a@b.com",
                        session_factory=lambda: db_session)
     assert db_session.query(Notification).count() == 1
+    assert len(calls) == 1, "the email should only be sent once"
+
+
+def test_a_failed_attempt_followed_by_a_successful_retry_ends_with_one_sent_row(db_session, monkeypatch):
+    """If the first attempt fails (network error), the second attempt should
+    try again and update the existing row with is_sent=True."""
+    complaint = _complaint(db_session)
+    calls = []
+
+    def send_failing_then_succeeding(*a, **k):
+        calls.append(1)
+        if len(calls) < 2:
+            raise OSError("network timeout")
+        # Second call succeeds
+
+    monkeypatch.setattr("app.services.notify._send_email", send_failing_then_succeeding)
+
+    # First attempt fails
+    notify_citizen(tracking_id=complaint.tracking_id, complaint_id=complaint.id,
+                   category="ROADS", status="assigned", recipient="a@b.com",
+                   session_factory=lambda: db_session)
+
+    record = db_session.query(Notification).one()
+    assert record.is_sent is False
+    assert record.sent_at is None
+
+    # Second attempt succeeds and updates the same row
+    notify_citizen(tracking_id=complaint.tracking_id, complaint_id=complaint.id,
+                   category="ROADS", status="assigned", recipient="a@b.com",
+                   session_factory=lambda: db_session)
+
+    record = db_session.query(Notification).one()
+    assert record.is_sent is True
+    assert record.sent_at is not None
+    assert len(calls) == 2, "both attempts should have called _send_email"
 
 
 def test_a_non_dedupe_integrity_error_propagates(db_session, monkeypatch):
