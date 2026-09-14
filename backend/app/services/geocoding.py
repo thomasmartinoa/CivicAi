@@ -24,6 +24,10 @@ def reverse_geocode(lat: float, lon: float, *, transport: httpx.BaseTransport | 
         response.raise_for_status()
         payload = response.json()
 
+    # Nominatim returns HTTP 200 with {"error": "..."} on failure
+    if "error" in payload:
+        raise ValueError(payload["error"])
+
     address = payload.get("address", {}) or {}
     return LocationInfo(
         address=payload.get("display_name", "") or "",

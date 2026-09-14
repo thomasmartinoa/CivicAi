@@ -40,3 +40,10 @@ def test_a_timeout_raises_rather_than_hanging():
 
     with pytest.raises(httpx.ConnectTimeout):
         reverse_geocode(0, 0, transport=httpx.MockTransport(timeout))
+
+
+def test_a_nominatim_error_response_raises():
+    """Nominatim returns HTTP 200 with {"error": "..."} when geocoding fails."""
+    payload = {"error": "Unable to geocode"}
+    with pytest.raises(ValueError, match="Unable to geocode"):
+        reverse_geocode(0, 0, transport=_transport(payload))

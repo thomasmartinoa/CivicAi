@@ -111,8 +111,9 @@ def test_an_empty_string_tenant_id_still_fails_closed_when_ambiguous(client, db_
 
 
 def test_an_oversized_upload_is_rejected(client):
-    """The read is bounded: a client must not be able to choose how much memory
-    we allocate on a public endpoint."""
+    """The size limit is enforced end-to-end: Starlette has already spooled the
+    body by the time the handler runs, so _read_bounded bounds heap allocation,
+    not bandwidth. store_upload validates the same limit as a second check."""
     response = client.post(
         "/complaints/", data=_form(),
         files=[("files", ("big.jpg", b"x" * (MAX_UPLOAD_BYTES + 1024), "image/jpeg"))],
