@@ -69,7 +69,7 @@ def _media_to_prompt_vars(payload: dict) -> dict:
 
     from app.config import settings
 
-    upload_root = Path(settings.upload_dir).resolve()
+    upload_root = settings.upload_path
     candidate = (upload_root / Path(payload["file_path"]).name).resolve()
     if upload_root not in candidate.parents:
         raise ValueError(f"media path escapes the upload root: {payload['file_path']!r}")

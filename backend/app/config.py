@@ -1,6 +1,9 @@
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
@@ -44,6 +47,13 @@ class Settings(BaseSettings):
 
     # ── Storage ───────────────────────────────────────────────
     upload_dir: str = "./uploads"
+
+    @property
+    def upload_path(self) -> Path:
+        """upload_dir anchored to the backend directory when relative, so store,
+        serve and the vision adapter resolve it identically regardless of CWD."""
+        raw = Path(self.upload_dir)
+        return raw if raw.is_absolute() else (BACKEND_DIR / raw).resolve()
 
 
 settings = Settings()

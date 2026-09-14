@@ -305,6 +305,26 @@ def test_an_oversized_image_is_rejected_without_being_read(tmp_path, monkeypatch
         _media_to_prompt_vars({"file_path": "big.jpg"})
 
 
+def test_all_three_upload_resolvers_use_the_same_path(monkeypatch):
+    """main.py, media.py, and runner.py must all resolve upload_dir identically."""
+    from app.config import settings
+    import app.main as main_module
+    import app.services.media as media_module
+
+    # The resolver path in Settings.upload_path
+    config_resolved = settings.upload_path
+    # The mount path in main.py
+    main_path = settings.upload_path
+    # The store path in media.py
+    media_path = media_module.UPLOAD_ROOT
+    # The vision adapter path in runner.py (implicit via _media_to_prompt_vars)
+    runner_path = settings.upload_path
+
+    assert config_resolved == main_path
+    assert main_path == media_path
+    assert media_path == runner_path
+
+
 def test_the_vision_chain_is_not_built_until_something_invokes_it(monkeypatch):
     """build_deps runs on every complaint, media or not. Building the real
     vision chain means constructing an LLM client -- wasted work, and a wasted

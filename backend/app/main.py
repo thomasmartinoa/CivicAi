@@ -9,9 +9,6 @@ from app.api import complaints, system
 from app.config import settings
 from app.db.session import SessionLocal
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-UPLOADS_DIR = BASE_DIR / "uploads"
-
 
 def _guard_against_placeholder_secret_in_production() -> None:
     """Refuse to boot with the placeholder SECRET_KEY in production.
@@ -71,5 +68,5 @@ app.add_middleware(
 app.include_router(system.router)
 app.include_router(complaints.router)
 
-UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+settings.upload_path.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(settings.upload_path)), name="uploads")

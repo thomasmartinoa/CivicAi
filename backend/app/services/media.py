@@ -12,7 +12,7 @@ from pathlib import Path
 
 from app.config import settings
 
-UPLOAD_ROOT = Path(settings.upload_dir).resolve()
+UPLOAD_ROOT = settings.upload_path
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 
 # Extension -> media_type. An extension absent from this map is rejected before
