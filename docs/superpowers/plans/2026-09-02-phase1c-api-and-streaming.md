@@ -1380,3 +1380,57 @@ dedupe_key makes a repeat a no-op — v1 re-sent SLA warnings every five minutes
 - [ ] Every notification attempt leaves a `notifications` row; a repeat is a no-op
 
 **Next:** Phase 2 — RAG. The corpus, the ingest CLI, FAISS with hybrid retrieval, and the four nodes that stop guessing.
+
+---
+
+## Carried forward into Phase 2
+
+**Docs to reconcile before Phase 2 starts**
+- The spec's phase table and the Phase 1b plan both list LangSmith tracing and the SLA
+  monitor port under Phase 1. Neither landed in 1a, 1b or 1c. Decide where they go and
+  say so — an omission that is a decision is fine; one that is an accident is not.
+
+**Frontend contract the live view will need**
+- No terminal event on the WebSocket. `_run_one` publishes one message per node and
+  nothing at completion or failure, so a subscriber cannot tell "still running" from
+  "finished, go poll". Publish a final `{"node": "__end__", "status": ...}` on both the
+  success and the failure path.
+- The first update is usually lost: `schedule_complaint_run` fires before the 201 is
+  serialised, and `intake` has typically published before the client opens the socket.
+  Document that the client seeds from `GET /track` and treats the socket as incremental.
+- Node summaries are audit strings, not citizen text. `notify_node`'s failure summary can
+  carry a raw database error. A mapping layer belongs in front of the socket.
+
+**Open behaviours**
+- A failed notification is never re-driven. The `SENT_SUMMARY` guard permits a retry and
+  `notify_citizen` now checks before sending, so a re-drive is safe to build — but
+  nothing calls the node again once the thread completes.
+- Deterministic failures are retried on every restart without bound: a run that hits
+  the trap leaves `submitted`, so the sweep re-drives it at every boot, adding a failed
+  `AgentRun` each time. A max-attempts check against failed-run count is a Phase 3 item.
+- No graceful drain at shutdown. In-flight background tasks are cancelled when the loop
+  closes; the sweep resumes them, but Phase 1b measured that an abrupt stop can replay
+  a whole run. `await asyncio.wait(_background_tasks, timeout=15)` after the lifespan
+  `yield` would turn most restarts from replay into completion.
+- Single-process assumptions: with `--workers 2` every worker runs the sweep and the
+  same complaint gets two concurrent runs on one checkpoint thread. Documented in
+  `streaming.py`; should be in `execution.py` too. The Dockerfile is single-worker.
+
+**Input hardening**
+- `citizen_email` is an unvalidated `str`. No header injection (verified — `EmailMessage`
+  rejects CR/LF), but a bad value lands as a silently failed notification instead of a
+  422. `latitude`/`longitude` have no range validation.
+- `store_upload` trusts the extension only; `b"fake-jpeg"` stores as an image and burns
+  a retried vision call before the node degrades. A four-byte magic check is cheap.
+- `From: noreply@civicai.gov` is hard-coded on a domain the project does not own; any
+  DMARC-enforcing relay will reject it. Make it a setting.
+- `ComplaintSubmitted` and `ComplaintDetail` expose the internal `id` alongside the
+  tracking id, which is meant to be the only credential.
+
+**Accepted as-is**
+- `_read_bounded` bounds heap, not bandwidth or disk — Starlette has already spooled the
+  body before the handler runs. A `Content-Length` guard or proxy limit is the other half.
+- `_is_loopback` matches literal `localhost` and loopback IPs only; a hostname resolving
+  to loopback gets STARTTLS attempted and fails safe.
+- A concurrent-first-attempt race in `notify_citizen` could double-send within a
+  millisecond window; the `IntegrityError` backstop records one row.
