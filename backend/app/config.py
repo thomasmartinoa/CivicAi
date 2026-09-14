@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
 
+    # ── RAG ───────────────────────────────────────────────
+    embedding_model: str = "gemini-embedding-001"
+    rag_index_dir: str = "./data/index"
+
     # ── Storage ───────────────────────────────────────────────
     upload_dir: str = "./uploads"
 

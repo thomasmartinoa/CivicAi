@@ -34,3 +34,8 @@ langgraph-checkpoint-sqlite==3.1.1
 aiosqlite==0.22.1
 langsmith==0.12.1
 
+
+# ── RAG (Phase 2) ──────────────────────────────────
+faiss-cpu==1.15.0
+rank-bm25==0.2.2
+numpy>=2.0,<3
