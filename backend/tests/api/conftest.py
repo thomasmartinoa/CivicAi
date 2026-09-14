@@ -22,12 +22,17 @@ def client(db_session, tmp_path, monkeypatch):
     refuses to boot with the placeholder SECRET_KEY while
     ENVIRONMENT=production — the ambient default here, since there is no
     backend/.env in this repo.
+
+    SessionLocal is patched where main.py looks it up, so the lifespan sweep
+    runs against the fixture database.
     """
     from app.db.session import get_db
     from app.services import media as media_module
+    import app.main as main_module
 
     monkeypatch.setattr(media_module, "UPLOAD_ROOT", tmp_path)
     monkeypatch.setattr(settings, "secret_key", "test-secret-key-not-the-placeholder")
+    monkeypatch.setattr(main_module, "SessionLocal", lambda: db_session)
     app.dependency_overrides[get_db] = lambda: db_session
     seed_database(db_session)
     captured: list[str] = []

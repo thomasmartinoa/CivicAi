@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import complaints, system
 from app.config import settings
+from app.db.session import SessionLocal
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 UPLOADS_DIR = BASE_DIR / "uploads"
@@ -38,8 +39,12 @@ async def lifespan(app: FastAPI):
 
     from app.services.execution import resume_incomplete_runs, schedule_complaint_run
 
+    # Check if a provider is configured
+    if settings.gemini_api_key is None and not settings.ollama_enabled:
+        logger.warning("no LLM provider configured; AI pipeline will not function")
+
     try:
-        for complaint_id in resume_incomplete_runs():
+        for complaint_id in resume_incomplete_runs(session_factory=SessionLocal):
             logger.info("resuming interrupted complaint %s", complaint_id)
             schedule_complaint_run(complaint_id)
     except Exception:
