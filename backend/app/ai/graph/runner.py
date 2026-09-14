@@ -285,6 +285,9 @@ async def _advance_streaming(
     When the thread is already complete, yields zero chunks (consistent with astream
     on a finished thread), so ran is False and the caller skips persistence.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     snapshot = await graph.aget_state(config)
     if snapshot.created_at is None:
         graph_input = state
@@ -295,12 +298,13 @@ async def _advance_streaming(
         return snapshot.values, False
 
     # Stream the run and collect updates
-    result = None
     async for chunk in graph.astream(graph_input, config, stream_mode="updates"):
         # chunk is {node: update_dict}
         for node, update in chunk.items():
-            await on_update(node, update)
-        result = update  # Keep the last update for now
+            try:
+                await on_update(node, update)
+            except Exception:
+                logger.exception("observer failed for node %s; continuing", node)
 
     # Read the final state from the checkpoint
     final = await graph.aget_state(config)
@@ -380,7 +384,9 @@ async def run_complaint(
             # invisible in the database. This trap covers both node failures and
             # persistence failures; the latter are recoverable (the sweep re-finds the
             # complaint and persist_result idempotency handles replay), so the value
-            # here is the audit trail, not recovery.
+            # here is the audit trail, not recovery. Note that deps construction is
+            # deliberately outside this trap because a configuration failure (e.g., no
+            # LLM provider) is not the complaint's failure.
             duration_ms = int((time.monotonic() - started) * 1000)
             session.rollback()
             session.add(AgentRun(

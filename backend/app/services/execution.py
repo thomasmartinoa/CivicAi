@@ -41,7 +41,7 @@ async def _publish_progress(tracking_id: str, node: str, update: dict) -> None:
     """Publish graph progress as a node update with a human summary for the citizen."""
     from app.services.streaming import registry
 
-    decisions = update.get("decision_log") or []
+    decisions = (update or {}).get("decision_log") or []
     await registry.publish(tracking_id, {
         "node": node,
         "summary": decisions[-1].summary if decisions else None,

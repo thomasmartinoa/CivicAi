@@ -325,3 +325,61 @@ def test_the_vision_chain_is_not_built_until_something_invokes_it(monkeypatch):
 
     lazy.invoke({"file_path": "b.jpg"})
     assert calls["n"] == 1, "the chain should be built once and reused"
+
+
+async def test_streaming_with_empty_node_return_completes(env):
+    """A node returning {} or None produces an update that _publish_progress
+    must handle without crashing. This must not fail the run."""
+    session, complaint = env
+    updates_seen = []
+
+    async def capture_update(node: str, update: dict) -> None:
+        updates_seen.append((node, update))
+
+    # Use the real graph but with a mock checkpointer
+    deps = _deps(session_factory=lambda: session)
+    saver = InMemorySaver()
+
+    # Run twice: first time to populate checkpoint, second to replay notify
+    # (which returns {} on the replay path)
+    for run_num in range(2):
+        state = await run_complaint(
+            complaint.id,
+            session_factory=lambda: session,
+            deps=deps,
+            checkpointer=saver,
+            on_update=capture_update,
+        )
+        assert state["complaint_id"] == complaint.id
+
+    session.expire_all()
+    # Verify the run completed and is recorded
+    run = session.query(AgentRun).one()
+    assert run.status == "completed"
+    assert session.query(Complaint).one().status == "assigned"
+
+
+async def test_streaming_observer_exception_does_not_fail_the_run(env):
+    """If on_update raises, the observer failure must not crash the run."""
+    session, complaint = env
+
+    async def boom(node: str, update: dict) -> None:
+        raise RuntimeError("observer crashed")
+
+    deps = _deps(session_factory=lambda: session)
+    saver = InMemorySaver()
+
+    state = await run_complaint(
+        complaint.id,
+        session_factory=lambda: session,
+        deps=deps,
+        checkpointer=saver,
+        on_update=boom,
+    )
+
+    session.expire_all()
+    # The run must complete despite the observer crashing
+    assert state["complaint_id"] == complaint.id
+    run = session.query(AgentRun).one()
+    assert run.status == "completed"
+    assert session.query(Complaint).one().status == "assigned"
