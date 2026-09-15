@@ -63,7 +63,7 @@ def test_rrf_rewards_appearing_in_both_rankings():
     dense = [a, b, c]
     sparse = [Hit(_corpus()[1], 3.0, "bm25"), Hit(_corpus()[4], 2.0, "bm25")]
 
-    merged = rrf_merge([dense, sparse], k=60)
+    merged = rrf_merge([dense, sparse], rrf_k=60)
     # c2 (index 1) is rank 2 in dense and rank 1 in sparse: 1/62 + 1/61 — beats c1's 1/61 alone
     assert merged[0].chunk.source == "c2"
     assert merged[0].source_retriever == "hybrid"

@@ -73,17 +73,17 @@ class BM25Retriever:
         return hits[:k]
 
 
-def rrf_merge(rankings: list[list[Hit]], *, k: int = 60) -> list[Hit]:
-    """Reciprocal Rank Fusion: score = Σ over rankings of 1 / (k + rank).
+def rrf_merge(rankings: list[list[Hit]], *, rrf_k: int = 60) -> list[Hit]:
+    """Reciprocal Rank Fusion: score = Σ over rankings of 1 / (rrf_k + rank).
 
-    Rank is 1-based. k=60 is the value from the original paper and damps the
+    Rank is 1-based. rrf_k=60 is the value from the original paper and damps the
     advantage of being first in any single list. Scores from the inputs are
     ignored on purpose — a cosine and a BM25 score are not comparable."""
     fused: dict[str, float] = defaultdict(float)
     by_id: dict[str, Chunk] = {}
     for ranking in rankings:
         for rank, hit in enumerate(ranking, start=1):
-            fused[hit.chunk.chunk_id] += 1.0 / (k + rank)
+            fused[hit.chunk.chunk_id] += 1.0 / (rrf_k + rank)
             by_id.setdefault(hit.chunk.chunk_id, hit.chunk)
     return [
         Hit(by_id[cid], score, "hybrid")
