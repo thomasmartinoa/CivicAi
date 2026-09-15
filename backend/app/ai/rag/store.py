@@ -7,7 +7,10 @@ the index is chunks[i].
 
 The manifest stamps the embedding model tag. Loading an index with a different
 embedder is refused: a mismatched model does not error, it returns plausible
-wrong neighbours, which is the worst possible failure mode for retrieval.
+wrong neighbours, which is the worst possible failure mode for retrieval. A
+sidecar shorter than the index turns a search into an IndexError long after
+the corruption happened, so load() checks that the index, chunks, and manifest
+agree on count and dimension and refuses to load otherwise.
 """
 
 import json
@@ -22,6 +25,10 @@ from app.ai.rag.embeddings import EMBEDDING_DIM, Embedder
 
 
 class IndexModelMismatch(RuntimeError):
+    pass
+
+
+class IndexCorrupt(RuntimeError):
     pass
 
 
@@ -48,6 +55,8 @@ class FaissStore:
         self._chunks.extend(chunks)
 
     def search(self, query: str, *, fetch_k: int = 50) -> list[tuple[Chunk, float]]:
+        if fetch_k <= 0:
+            raise ValueError("fetch_k must be positive")
         if not self._chunks:
             return []
         vector = np.asarray([self._embedder.embed_query(query)], dtype="float32")
@@ -76,7 +85,22 @@ class FaissStore:
                 f"index was built with {manifest['model_tag']!r} but the configured "
                 f"embedder is {embedder.model_tag!r}; rebuild the index or switch embedder"
             )
+        if manifest["dim"] != EMBEDDING_DIM:
+            raise IndexCorrupt(
+                f"index dim {manifest['dim']}, embedder dim {EMBEDDING_DIM}; rebuild the index"
+            )
         store = cls(embedder)
         store._index = faiss.read_index(str(directory / "index.faiss"))
         store._chunks = [Chunk(**c) for c in json.loads((directory / "chunks.json").read_text(encoding="utf-8"))]
+
+        # Check consistency between index, chunks, and manifest
+        index_count = store._index.ntotal
+        chunks_count = len(store._chunks)
+        manifest_count = manifest["count"]
+
+        if not (index_count == chunks_count == manifest_count):
+            raise IndexCorrupt(
+                f"index has {index_count} vectors, chunks has {chunks_count}, manifest says {manifest_count}"
+            )
+
         return store
