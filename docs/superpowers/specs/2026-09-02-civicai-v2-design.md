@@ -370,12 +370,14 @@ docs/
 | Phase | Deliverable | Docs |
 |---|---|---|
 | **0** | Legacy explainer written; v1 deleted; new backend skeleton, config, models, baseline migration; app boots | 01 |
-| **1** | Graph core: state, nodes, media subgraph with `Send`, checkpointer, streaming, `llm.py`, fake-LLM tests, LangSmith live. A complaint flows end to end. SLA monitor ported with tests. | 03, 04 |
+| **1** | Graph core: state, nodes, media subgraph with `Send`, checkpointer, streaming, `llm.py`, fake-LLM tests. A complaint flows end to end. | 03, 04 |
 | **2** | RAG: corpus, ingest CLI, FAISS + hybrid + RRF, citations in four nodes, semantic cache. Semantic cluster detection, grounded daily briefing, and the email-draft chain. **Hardcoded cost/SLA/department dicts deleted.** | 05, 06 |
 | **3** | Evals: golden set, metrics, judges, Ragas, three-way baseline comparison, regression gate | 07 |
 | **4** | Officer ReAct agent, tools, SSE endpoint | — |
 | **5** | Six frontend screens | — |
 | **6** | Polish, ADRs, README with screenshots, docker-compose | 02, 08, 09, 10 |
+
+*Moved during execution:* LangSmith tracing → Phase 3 (evals & observability); SLA monitor port → Phase 2b (background workflows).
 
 Phase 0 documents v1 **before** deleting it.
 
