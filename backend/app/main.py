@@ -40,6 +40,14 @@ async def lifespan(app: FastAPI):
     if settings.gemini_api_key is None and not settings.ollama_enabled:
         logger.warning("no LLM provider configured; AI pipeline will not function")
 
+    from app.ai.rag.ingest import COLLECTION, collection_index_dir
+    if not (collection_index_dir(settings.rag_index_path, COLLECTION) / "manifest.json").exists():
+        logger.warning(
+            "no policy index at %s; nodes will run without citations until "
+            "`python -m app.ai.rag.ingest` has been run",
+            collection_index_dir(settings.rag_index_path, COLLECTION),
+        )
+
     try:
         for complaint_id in resume_incomplete_runs(session_factory=SessionLocal):
             logger.info("resuming interrupted complaint %s", complaint_id)

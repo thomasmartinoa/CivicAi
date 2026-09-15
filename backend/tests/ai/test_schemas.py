@@ -136,3 +136,12 @@ def test_the_remaining_models_construct_with_minimal_input():
                            jurisdiction_level="ward").contractor_id is None
     assert NodeDecision(node="classify", summary="ok").duration_ms is None
     assert RetrievedChunk(node="assess_risk", source="sop_roads.md").score is None
+
+
+def test_work_order_cost_may_be_unknown():
+    """Phase 2b deletes the placeholder cost dict. When the rate-card chain fails
+    the node must still emit the SLA window, so the cost is optional."""
+    from app.ai.schemas import WorkOrderDraft
+
+    draft = WorkOrderDraft(sla_hours=24, estimated_cost=None, cost_basis="estimate unavailable")
+    assert draft.estimated_cost is None

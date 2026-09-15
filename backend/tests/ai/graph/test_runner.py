@@ -379,6 +379,73 @@ async def test_streaming_with_empty_node_return_completes(env):
     assert session.query(Complaint).one().status == "assigned"
 
 
+@pytest.mark.xfail(strict=True, reason="route retrieves from Task 2")
+async def test_evidence_is_persisted_as_retrieved_chunk_rows(env):
+    from app.db.models.ai import RetrievedChunk as RetrievedChunkRow
+    from tests.ai.graph.test_retrieval import FakeRetriever, _hit
+
+    session, complaint = env
+    retriever = FakeRetriever([_hit("Public Works owns roads.", "sop_roads.md", ["Roads SOP", "Ownership"])])
+    await _run(session, complaint, _deps(session_factory=lambda: session, policy_retriever=retriever))
+
+    rows = session.query(RetrievedChunkRow).all()
+    assert rows, "route retrieved evidence, so a row must exist"
+    assert {r.node for r in rows} <= {"route", "work_order", "assess_risk", "investigate"}
+    assert all(r.source and r.chunk_id and r.snippet for r in rows)
+    stored = session.query(Complaint).one()
+    assert stored.evidence and stored.evidence[0]["source"] == "sop_roads.md"
+
+
+async def test_re_running_does_not_duplicate_retrieved_chunk_rows(env):
+    from app.db.models.ai import RetrievedChunk as RetrievedChunkRow
+    from tests.ai.graph.test_retrieval import FakeRetriever, _hit
+
+    session, complaint = env
+    retriever = FakeRetriever([_hit("Public Works owns roads.", "sop_roads.md", ["Roads SOP", "Ownership"])])
+    deps = _deps(session_factory=lambda: session, policy_retriever=retriever)
+    await _run(session, complaint, deps)
+    first = session.query(RetrievedChunkRow).count()
+    await _run(session, complaint, deps)
+    assert session.query(RetrievedChunkRow).count() == first
+
+
+@pytest.mark.xfail(strict=True, reason="route retrieves from Task 2")
+async def test_a_broken_retriever_degrades_but_does_not_terminate(env):
+    from tests.ai.graph.test_retrieval import FakeRetriever
+
+    session, complaint = env
+    retriever = FakeRetriever(raises=RuntimeError("index not built"))
+    await _run(session, complaint, _deps(session_factory=lambda: session, policy_retriever=retriever))
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.status == "assigned"
+    run = session.query(AgentRun).one()
+    assert "retrieval unavailable" in (run.error or "")
+
+
+def test_the_lazy_retriever_loads_once_and_reports_a_failed_load_every_time():
+    from app.ai.graph.runner import LazyRetriever
+
+    loads = []
+    def loader():
+        loads.append(1)
+        raise FileNotFoundError("no index")
+    lazy = LazyRetriever(loader)
+    for _ in range(2):
+        try:
+            lazy.search("q", k=1, fetch_k=1, filters=None)
+        except FileNotFoundError:
+            pass
+    assert len(loads) == 2, "a failed load must be retried, not cached as a permanent failure"
+
+    good = []
+    class Good:
+        def search(self, *a, **k): return good
+    lazy = LazyRetriever(lambda: Good())
+    assert lazy.search("q", k=1, fetch_k=1, filters=None) is good
+    assert lazy.search("q", k=1, fetch_k=1, filters=None) is good
+
+
 async def test_streaming_observer_exception_does_not_fail_the_run(env):
     """If on_update raises, the observer failure must not crash the run."""
     session, complaint = env

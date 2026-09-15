@@ -12,6 +12,7 @@ importing them. Two reasons, both load-bearing:
 
 from collections.abc import Callable
 from dataclasses import dataclass, fields
+from typing import Any
 
 from langchain_core.runnables import Runnable, RunnableConfig
 
@@ -31,6 +32,14 @@ class GraphDeps:
     classify_chain: Runnable | None = None
     risk_chain: Runnable | None = None
     vision_chain: Runnable | None = None
+    work_order_chain: Runnable | None = None
+    investigate_chain: Runnable | None = None
+    policy_retriever: Any | None = None
+    """Anything with .search(query, *, k, fetch_k, filters) -> list[Hit]. The
+    real one is a HybridRetriever over the policy corpus; tests pass a stub."""
+    cases_retriever: Any | None = None
+    """Same shape, over resolved complaints. Optional: absent until the first
+    case record is ingested."""
     session_factory: Callable | None = None
     """Must return a session this call may close. It is closed on every path,
     including on error, which expunges its identity map — so a caller holding

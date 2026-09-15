@@ -143,10 +143,19 @@ class WorkOrderDraft(BaseModel):
     model-generated timestamp. Do not add it back here."""
 
     sla_hours: int = Field(ge=1, description="Hours allowed to resolve this work order, counted from creation")
-    estimated_cost: float = Field(ge=0.0, description="Estimated cost to resolve the issue, in local currency")
+    estimated_cost: float | None = Field(default=None, ge=0.0, description="Estimated cost in rupees, or None when no grounded estimate could be made")
     cost_basis: str = Field(default="", description="Brief explanation of how the cost estimate was derived")
     materials: str = Field(default="", description="Materials or equipment likely needed")
     summary: str = Field(default="", description="One-line summary of the work to be done")
+
+
+class CostEstimate(BaseModel):
+    """What the rate-card chain returns. Folded into WorkOrderDraft by the node;
+    never stored in state on its own, so it is not in CHECKPOINT_ALLOWLIST."""
+
+    estimated_cost: float = Field(ge=0.0, description="Total estimated cost in rupees, from the cited rate card lines")
+    cost_basis: str = Field(description="Which rate card lines and quantities were used, citing evidence as [n]")
+    materials: str = Field(description="Materials and equipment needed, one line")
 
 
 # ── bookkeeping carried through the graph ────────────────────────────────
@@ -161,16 +170,25 @@ class NodeDecision(BaseModel):
 
 
 class RetrievedChunk(BaseModel):
-    """A retrieval hit, so any decision can cite its sources. Used from Phase 2.
+    """A retrieval hit, so any decision can cite its sources.
 
     `node` records which node performed the retrieval. `evidence` in
     ComplaintState is one flat accumulator shared by every node that retrieves,
     so without this field a chunk's origin is unrecoverable once the reducer
     merges it in alongside everyone else's.
+
+    `snippet` is the retrieved text itself — what the model actually saw — and
+    `headers` is the markdown section path, so a citation reads
+    "sop_roads.md › Roads SOP › Ownership" rather than "chunk 17".
     """
 
     node: str = Field(description="Name of the node that performed this retrieval")
     source: str = Field(description="Path or identifier of the retrieved document")
     chunk_id: str | None = Field(default=None, description="Identifier of the specific chunk within the source")
     score: float | None = Field(default=None, description="Retrieval relevance score, if available")
-    snippet: str = Field(default="", description="Excerpt of the retrieved text")
+    snippet: str = Field(default="", description="The retrieved text, as shown to the model")
+    headers: list[str] = Field(default_factory=list, description="Markdown header path of the chunk")
+
+    @property
+    def citation(self) -> str:
+        return " › ".join([self.source, *self.headers])

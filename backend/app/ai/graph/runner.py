@@ -42,6 +42,7 @@ def build_deps(session_factory: Callable, complaint) -> GraphDeps:
         classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify"),
         risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk"),
         vision_chain=_lazy_vision_chain(),
+        policy_retriever=LazyRetriever(_load_policy_retriever),
         session_factory=session_factory,
         geocode=reverse_geocode,
         notify=notify,
@@ -117,6 +118,36 @@ def _lazy_vision_chain():
     return RunnableLambda(invoke_lazily)
 
 
+class LazyRetriever:
+    """Load the index on first use, not at process start.
+
+    The API must boot without an index (the ingest CLI may not have run yet),
+    and tests must never touch the real one. A failed load is not cached: every
+    call retries, so each node reports the problem in its own error entry and a
+    later ingest is picked up on the next process start.
+    """
+
+    def __init__(self, loader: Callable) -> None:
+        self._loader = loader
+        self._retriever = None
+
+    def search(self, query: str, *, k: int, fetch_k: int, filters: dict | None):
+        if self._retriever is None:
+            self._retriever = self._loader()
+        return self._retriever.search(query, k=k, fetch_k=fetch_k, filters=filters)
+
+
+def _load_policy_retriever():
+    from app.ai.rag.embeddings import build_embedder
+    from app.ai.rag.ingest import COLLECTION, collection_index_dir, load_policy_retriever
+    from app.config import settings
+
+    return load_policy_retriever(
+        embedder=build_embedder(),
+        index_dir=collection_index_dir(settings.rag_index_path, COLLECTION),
+    )
+
+
 def _state_for(complaint) -> ComplaintState:
     coords = None
     if complaint.latitude is not None and complaint.longitude is not None:
@@ -159,7 +190,7 @@ def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
     the database to determine how many AgentSteps were already persisted for
     this complaint, then writes only the new decisions.
     """
-    from app.db.models.ai import AgentRun, AgentStep
+    from app.db.models.ai import AgentRun, AgentStep, RetrievedChunk as RetrievedChunkRow
     from app.db.models.complaint import Complaint
     from app.db.models.workflow import WorkOrder
 
@@ -245,6 +276,24 @@ def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
             status="ok",
             duration_ms=decision.duration_ms,
             output_summary=decision.summary,
+        ))
+
+    # Same reasoning as decision_log: `evidence` accumulates across resumes,
+    # and the database knows how many rows this complaint already has.
+    evidence_recorded = (
+        session.query(RetrievedChunkRow)
+        .join(AgentRun, RetrievedChunkRow.run_id == AgentRun.id)
+        .filter(AgentRun.complaint_id == state["complaint_id"])
+        .count()
+    )
+    for chunk in state["evidence"][evidence_recorded:]:
+        session.add(RetrievedChunkRow(
+            run_id=run.id,
+            node=chunk.node,
+            source=chunk.source,
+            chunk_id=chunk.chunk_id,
+            score=chunk.score,
+            snippet=chunk.snippet[:2000],
         ))
 
     session.commit()

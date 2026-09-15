@@ -7,7 +7,7 @@ from app.ai import schemas as schemas_module
 from app.ai.graph.state import (
     CHECKPOINT_ALLOWLIST, ComplaintState, build_serializer, initial_state,
 )
-from app.ai.schemas import Coords, MediaRef
+from app.ai.schemas import CostEstimate, Coords, MediaRef
 
 
 ACCUMULATING = ["media_insights", "evidence", "decision_log", "errors"]
@@ -59,12 +59,18 @@ def test_initial_state_starts_accumulators_empty():
 def test_checkpoint_allowlist_covers_every_pydantic_model_in_schemas():
     """A class missing from the allowlist is deserialized back as a plain dict,
     NOT an error — so `state["classification"].category` fails later with
-    AttributeError, far from the cause. This test is the guard."""
+    AttributeError, far from the cause. This test is the guard.
+
+    CostEstimate is deliberately excluded: it is the rate-card chain's return
+    type, folded into WorkOrderDraft by the node before anything reaches
+    ComplaintState, so it never needs to round-trip through the checkpoint
+    (see its docstring in app.ai.schemas)."""
     defined = {
         obj for obj in vars(schemas_module).values()
         if isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel
     }
-    missing = defined - set(CHECKPOINT_ALLOWLIST)
+    not_checkpointed = {CostEstimate}
+    missing = defined - set(CHECKPOINT_ALLOWLIST) - not_checkpointed
     assert not missing, f"not in CHECKPOINT_ALLOWLIST: {sorted(c.__name__ for c in missing)}"
 
 
