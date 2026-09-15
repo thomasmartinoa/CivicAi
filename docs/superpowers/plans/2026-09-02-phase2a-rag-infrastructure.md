@@ -1415,3 +1415,72 @@ SLA monitor port to Phase 2b, recorded in the spec's phase table."
 - [ ] `docs/adr/0002` exists and the spec's phase table no longer claims Phase 1 delivered tracing or the SLA monitor
 
 **Next:** Phase 2b — wire retrieval into `investigate`, `assess_risk`, `route` and `work_order`; citations into `state["evidence"]` and the `retrieved_chunks` table; delete the placeholder cost dict; the semantic cache; the SLA monitor port.
+
+---
+
+## Carried forward from Phase 2a (recorded 2026-09-15)
+
+Phase 2a landed in ten commits (c2a1753..3f9ccaf), 308 tests, no network in the
+suite. Every task was reviewed in isolation and the phase reviewed as a whole; the
+items below were found and consciously deferred. Phase 2b should read this before
+touching retrieval.
+
+**What Phase 2b must do at the seam**
+- Store citations against `DocumentChunk.id` (the UUID primary key), not only the
+  derived `chunk_id`. Chunk ids are now content-stable (source + header path + text)
+  so they survive edits elsewhere in a file, but a chunk whose own text changes gets
+  a new id by design; the DB row id is the durable join key for `RetrievedChunk`.
+- Use one index directory per collection: `collection_index_dir(settings.rag_index_path,
+  "policy")` today, `.../"cases"` for resolved complaints. `FaissStore.save` overwrites
+  the directory it is given; a whole rebuild into a shared directory wipes the other
+  collection. A retriever that needs both queries two stores and RRF-merges.
+- Filter with `doc_type`, not only `category`. The rate card, SLA policy, taxonomy
+  and contractor-scoring documents carry no `category`, so `work_order` and `route`
+  need `{"doc_type": "rate_card"}` / `{"doc_type": "contractor_scoring"}` (or two
+  retrieval calls) to reach the documents they must cite.
+- Scale `fetch_k`. Filtering happens after the dense top-`fetch_k` truncation; at 88
+  chunks the default 50 already returned 3 of 5 STRAY_ANIMALS chunks under the fake
+  embedder. Pass `fetch_k` proportional to corpus size (or the whole index for a
+  narrow filter) until per-collection sharding makes filter-then-search possible.
+- Wire loading into the API process: `main.py` has no RAG reference. Decide eager
+  load in `lifespan` (with a clear message when the index does not exist yet) versus
+  lazy `load_policy_retriever` inside nodes; handle `NoEmbedderConfigured`,
+  `IndexModelMismatch` and `IndexCorrupt` explicitly rather than through a request.
+- Retrievers are synchronous. `FaissStore.search` was probed with 8 threads × 200
+  searches on the real corpus with no crash or mismatch, so `asyncio.to_thread` from
+  async nodes is safe for reads. No concurrent `add`/`save` while serving — case-record
+  ingest must not run alongside live queries in the same process.
+- Add a DB index (or a generated column) for `metadata_json.chunk_id` on
+  `document_chunks` once case records push the table past a few thousand rows.
+
+**Chunking**
+- `#` lines inside fenced code blocks parse as headers. No corpus file has a fence;
+  guard `_HEADER` if one is ever added.
+- `Chunk.metadata` is a shallow copy; nested mutables in caller-supplied metadata are
+  shared by reference.
+- Plural stripping handles `+s` only: `classes` → `classe`, not `clas`. All 128
+  stripped-form collisions in the current vocabulary are intended singular/plural pairs.
+- Prose overlap can shrink to under one wrapped line when the overlap window contains
+  a newline (the line-boundary snap that keeps table rows whole).
+
+**Store and ingest**
+- `Chunk(**c)` on load is not forward-compatible with extra sidecar keys.
+- `save` writes three files without temp-and-rename; a crash mid-save leaves a
+  directory `load` will refuse (`IndexCorrupt`), which is the intended detection.
+- The dimension check compares the manifest to `EMBEDDING_DIM`, not to the vector
+  width read from `index.faiss`.
+- Unchanged files still re-embed on every run (the index is rebuilt whole). Fine at
+  88 chunks with a free embedder; an embedding cache keyed on `chunk_id` is the fix
+  if case records make it slow.
+- `session_factory: Callable` should read `Callable[[], Session]`.
+
+**Corpus**
+- SOP sections run 80–150 words, under the plan's 250–400 target, by choice: every
+  section is specific, and the tests pin the numbers that matter. Extend a section
+  only with real detail.
+- "Hybrid beats either retriever alone" is a Phase 3 eval question; the fake embedder
+  is content-hashed and cannot demonstrate it.
+
+**Doc inconsistency settled**
+- LangSmith tracing → Phase 3; SLA monitor port → Phase 2b. Recorded in the spec's
+  phase table.
