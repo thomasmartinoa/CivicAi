@@ -7,11 +7,10 @@ collection: policy
 
 ## Purpose
 
-Work order cost estimates are grounded in this rate card rather than the
-category-and-risk placeholder formula used before Phase 2 retrieval. Rates
-are indicative unit prices used for first-pass estimation; actual contractor
-quotes may vary with site conditions, and the rate card is revised annually
-to track material cost inflation.
+Work order cost estimates are grounded in the indicative unit rates below.
+Rates are first-pass estimates for budgeting and approval, not final
+quotes; actual contractor quotes may vary with site conditions, and the
+rate card is revised annually to track material cost inflation.
 
 ## Unit rates by item
 

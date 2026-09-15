@@ -47,7 +47,7 @@ def _chunk_id(source: str, ordinal: int, text: str) -> str:
 
 
 def _split_long(text: str, max_chars: int, overlap: int) -> list[str]:
-    """Recursive split by paragraph, then sentence, then hard cut, with overlap."""
+    """Iterative split by paragraph, then line, then sentence, then hard cut, with overlap."""
     if len(text) <= max_chars:
         return [text]
     pieces: list[str] = []
@@ -55,8 +55,8 @@ def _split_long(text: str, max_chars: int, overlap: int) -> list[str]:
     while start < len(text):
         end = min(start + max_chars, len(text))
         if end < len(text):
-            # prefer to break at a paragraph, then a sentence, then a space
-            for sep in ("\n\n", ". ", " "):
+            # prefer to break at a paragraph, then a line, then a sentence, then a space
+            for sep in ("\n\n", "\n", ". ", " "):
                 cut = text.rfind(sep, start, end)
                 if cut > start + max_chars // 2:
                     end = cut + len(sep)
@@ -64,13 +64,19 @@ def _split_long(text: str, max_chars: int, overlap: int) -> list[str]:
         pieces.append(text[start:end].strip())
         if end >= len(text):
             break
-        start = max(end - overlap, start + 1)
+        next_start = max(end - overlap, start + 1)
+        # Snap the overlap to a line boundary too, so a table row that made
+        # it whole into this chunk isn't handed to the next chunk split down
+        # its middle.
+        newline = text.find("\n", next_start, end)
+        start = newline + 1 if newline != -1 else next_start
     return [p for p in pieces if p]
 
 
 def chunk_markdown(
     text: str, source: str, *, max_chars: int = 1800, overlap: int = 200
 ) -> list[Chunk]:
+    text = text.replace("\r\n", "\n")
     front, body = _parse_front_matter(text)
     chunks: list[Chunk] = []
     header_path: list[str] = []

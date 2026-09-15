@@ -9,21 +9,20 @@ collection: policy
 
 Every complaint receives a priority score from 0 to 100, produced by scoring
 four factors — category severity, population impact, safety risk, and
-urgency — each on a 0-25 scale and summing them. The score maps onto one of
-four risk bands: 0 to 25 is low, 26 to 50 is medium, 51 to 75 is high, and 76
-to 100 is critical. A complaint's response window is set by its band, not by
-its category, so a low-severity electrical fault and a low-severity pothole
-carry the same window.
+urgency — each on a 0-25 scale and summing them. The score maps onto one of four risk bands: 0–25 is low, 26–50 is medium, 51–75 is high, and 76–100 is critical.
+A complaint's response window is set by its band, not by its category, so a
+low-severity electrical fault and a low-severity pothole carry the same
+window.
 
 ## Response windows
 
-Critical complaints must receive a response within 4 hours of intake. High
-complaints must receive a response within 24 hours. Medium complaints must
-receive a response within 72 hours. Low complaints must receive a response
-within 168 hours. "Response" means a work order is opened and a first
-inspection or action is logged against it — it does not require full
-resolution within the window, only that the assigned team has engaged with
-the case.
+Critical complaints are responded to within 4 hours of intake.
+High complaints are responded to within 24 hours of intake.
+Medium complaints are responded to within 72 hours of intake.
+Low complaints are responded to within 168 hours of intake.
+"Response" means a work order is opened and a first inspection or action is
+logged against it — it does not require full resolution within the window,
+only that the assigned team has engaged with the case.
 
 ## Warning thresholds
 

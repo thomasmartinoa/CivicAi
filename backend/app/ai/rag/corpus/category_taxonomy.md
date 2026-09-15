@@ -7,11 +7,11 @@ collection: policy
 
 ## Overview
 
-This is the reference used when a classifier's confidence is low: a short,
-authoritative definition of each of the twelve categories and the hand-offs
-that most often cause confusion. It intentionally repeats the boundary
-language from each department's SOP so a single retrieval hit is enough to
-disambiguate.
+This is the reference used when a complaint does not obviously belong to one
+category: a short, authoritative definition of each of the twelve categories
+and the hand-offs that most often cause confusion. It intentionally repeats
+the boundary language from each department's SOP so a single retrieval hit
+is enough to disambiguate.
 
 ## ROADS
 
