@@ -31,6 +31,7 @@ class IngestReport:
     chunks: int
     skipped_unchanged: int
     index_dir: Path
+    removed: int = 0
 
 
 def _content_hash(text: str) -> str:
@@ -50,8 +51,10 @@ def ingest_policy_corpus(
     try:
         all_chunks: list[Chunk] = []
         skipped = 0
+        seen: set[str] = set()
 
         for path, text in load_corpus(corpus_dir):
+            seen.add(path.name)
             digest = _content_hash(text)
             doc = session.query(Document).filter_by(
                 collection=COLLECTION, source_path=path.name
@@ -83,17 +86,30 @@ def ingest_policy_corpus(
                 ))
             all_chunks.extend(chunks)
 
-        session.commit()
+        # Files that left the corpus since the last run: their rows must not
+        # outlive the index, or the registry silently drifts from reality.
+        orphans_query = session.query(Document).filter_by(collection=COLLECTION)
+        if seen:
+            orphans_query = orphans_query.filter(~Document.source_path.in_(seen))
+        orphans = orphans_query.all()
+        for orphan in orphans:
+            session.query(DocumentChunk).filter_by(document_id=orphan.id).delete()
+            session.delete(orphan)
+        removed = len(orphans)
 
+        # Save the index before committing the DB: a failed save must not
+        # leave rows claiming their content was indexed.
         store = FaissStore(embedder)
         store.add(all_chunks)
         store.save(index_dir)
 
+        session.commit()
+
         documents = session.query(Document).filter_by(collection=COLLECTION).count()
-        logger.info("indexed %d documents, %d chunks (%d unchanged) into %s",
-                    documents, len(all_chunks), skipped, index_dir)
+        logger.info("indexed %d documents, %d chunks (%d unchanged, %d removed) into %s",
+                    documents, len(all_chunks), skipped, removed, index_dir)
         return IngestReport(documents=documents, chunks=len(all_chunks),
-                            skipped_unchanged=skipped, index_dir=index_dir)
+                            skipped_unchanged=skipped, index_dir=index_dir, removed=removed)
     finally:
         session.close()
 
@@ -111,7 +127,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     report = ingest_policy_corpus(
         embedder=build_embedder(),
-        index_dir=Path(settings.rag_index_dir),
+        index_dir=settings.rag_index_path,
         session_factory=SessionLocal,
     )
     print(f"{report.documents} documents, {report.chunks} chunks -> {report.index_dir}")

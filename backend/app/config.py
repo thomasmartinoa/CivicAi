@@ -59,5 +59,12 @@ class Settings(BaseSettings):
         raw = Path(self.upload_dir)
         return raw if raw.is_absolute() else (BACKEND_DIR / raw).resolve()
 
+    @property
+    def rag_index_path(self) -> Path:
+        """rag_index_dir anchored to the backend directory when relative, so the
+        ingest CLI and the API process resolve it identically regardless of CWD."""
+        raw = Path(self.rag_index_dir)
+        return raw if raw.is_absolute() else (BACKEND_DIR / raw).resolve()
+
 
 settings = Settings()

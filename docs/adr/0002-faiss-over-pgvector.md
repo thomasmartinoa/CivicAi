@@ -26,7 +26,9 @@ embedding model tag. SQLite remains the relational store.
 - **Two stores to keep consistent.** The index and the `document_chunks` table
   describe the same chunks. The ingest CLI rebuilds the index from scratch each
   run so they cannot drift, at the cost of re-embedding unchanged text — which
-  is why `Document.content_hash` skips the DB write but not the embed.
+  is why `Document.content_hash` skips the DB write but not the embed. Files
+  removed from the corpus have their rows pruned on the next run, so deletion
+  cannot drift either.
 - **No concurrent writers.** One process rebuilds the index; readers load it.
 
 ## When to revisit

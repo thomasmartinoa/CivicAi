@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.ai.rag.chunking import CORPUS_DIR
 from app.ai.rag.embeddings import FakeEmbedder
 from app.ai.rag.ingest import IngestReport, ingest_policy_corpus, load_policy_retriever
@@ -80,3 +82,52 @@ def test_the_real_corpus_ingests_end_to_end(db_session, tmp_path):
                                   session_factory=lambda: db_session, corpus_dir=CORPUS_DIR)
     assert report.documents == 16
     assert report.chunks >= 16
+
+
+def test_a_file_removed_from_the_corpus_is_pruned_from_the_registry(db_session, tmp_path):
+    corpus = _mini_corpus(tmp_path)
+    kwargs = dict(embedder=FakeEmbedder(), index_dir=tmp_path / "idx",
+                  session_factory=lambda: db_session, corpus_dir=corpus)
+    ingest_policy_corpus(**kwargs)
+    (corpus / "sla_policy.md").unlink()
+
+    report = ingest_policy_corpus(**kwargs)
+
+    assert report.removed == 1
+    assert report.documents == 1
+    assert db_session.query(Document).count() == 1
+    assert db_session.query(DocumentChunk).count() == report.chunks
+
+    retriever = load_policy_retriever(embedder=FakeEmbedder(), index_dir=tmp_path / "idx")
+    hits = retriever.search("sla", k=5)
+    assert not any(h.chunk.source == "sla_policy.md" for h in hits)
+
+
+def test_a_failed_index_save_leaves_no_rows_claiming_indexed(db_session, tmp_path):
+    corpus = _mini_corpus(tmp_path)
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        ingest_policy_corpus(embedder=FakeEmbedder(), index_dir=blocker,
+                             session_factory=lambda: db_session, corpus_dir=corpus)
+
+    assert db_session.query(Document).count() == 0
+    assert db_session.query(DocumentChunk).count() == 0
+
+
+def test_a_changed_embedder_forces_reindex_of_every_document(db_session, tmp_path):
+    corpus = _mini_corpus(tmp_path)
+    index_dir = tmp_path / "idx"
+    ingest_policy_corpus(embedder=FakeEmbedder(), index_dir=index_dir,
+                         session_factory=lambda: db_session, corpus_dir=corpus)
+
+    class OtherEmbedder(FakeEmbedder):
+        model_tag = "other@768"
+
+    report = ingest_policy_corpus(embedder=OtherEmbedder(), index_dir=index_dir,
+                                  session_factory=lambda: db_session, corpus_dir=corpus)
+
+    assert report.skipped_unchanged == 0
+    docs = db_session.query(Document).all()
+    assert docs and all(d.embedding_model == "other@768" for d in docs)

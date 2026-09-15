@@ -21,6 +21,18 @@ def test_settings_read_env(monkeypatch):
     assert s.gemini_api_key == "test-key-123"
 
 
+def test_rag_index_path_is_anchored_to_backend_dir():
+    """Mirrors upload_path: relative resolves against BACKEND_DIR, absolute stays put,
+    so the ingest CLI and the API process agree on where the index lives."""
+    from app.config import BACKEND_DIR
+
+    relative = Settings(_env_file=None, rag_index_dir="./data/index")
+    assert relative.rag_index_path == (BACKEND_DIR / "data/index").resolve()
+
+    absolute = Settings(_env_file=None, rag_index_dir="/tmp/civicai_idx")
+    assert absolute.rag_index_path == Path("/tmp/civicai_idx")
+
+
 def test_there_are_twelve_categories():
     assert len(Category) == 12
     assert Category.ROADS == "ROADS"
