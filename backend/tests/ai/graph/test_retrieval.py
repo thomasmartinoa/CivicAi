@@ -3,17 +3,14 @@ never raise: a missing index is a soft error, like a failed geocode."""
 
 from app.ai.graph.retrieval import DEFAULT_FETCH_K, RetrievalResult, format_evidence, retrieve
 from app.ai.rag.chunking import chunk_record
-from app.ai.rag.retrievers import Hit
+from app.ai.rag.retrievers import Hit, matches
 from app.ai.schemas import RetrievedChunk
 
 
 class FakeRetriever:
-    """Records each call and pages through canned hits, one slice per call.
-
-    Call N (0-indexed) returns `hits[N:N+k]`, so a caller that issues several
-    searches against one retriever -- one per document type, say -- can hand
-    each call its own canned hit instead of always seeing the first one.
-    `.search` mirrors HybridRetriever's signature.
+    """Records each call and returns the canned hits that match `filters`, so
+    a node that searches once per document type sees the right hit for each
+    -- the same post-filter contract as HybridRetriever.
     """
 
     def __init__(self, hits=None, raises=None):
@@ -22,15 +19,41 @@ class FakeRetriever:
         self.calls = []
 
     def search(self, query, *, k=5, fetch_k=50, filters=None):
-        start = len(self.calls)
         self.calls.append({"query": query, "k": k, "fetch_k": fetch_k, "filters": filters})
         if self.raises:
             raise self.raises
-        return self.hits[start:start + k]
+        return [h for h in self.hits if matches(h.chunk, filters)][:k]
 
 
-def _hit(text, source, headers=None, score=0.5):
-    chunk = chunk_record(text, source, {"headers": headers or [], "doc_type": "sop"})[0]
+# Maps a fixed source name to the doc_type a real corpus file of that name
+# would carry. sop_<category>.md and case:<id> are patterns, not exact names,
+# so they are handled separately in _hit below.
+_DOC_TYPES = {
+    "rate_card.md": "rate_card",
+    "sla_policy.md": "sla_policy",
+    "category_taxonomy.md": "taxonomy",
+    "contractor_scoring.md": "contractor_scoring",
+}
+
+
+def _default_metadata(source: str) -> dict:
+    if source.startswith("sop_") and source.endswith(".md"):
+        return {"doc_type": "sop", "category": source[len("sop_"):-len(".md")].upper()}
+    if source.startswith("case:"):
+        return {"doc_type": "case"}
+    if source in _DOC_TYPES:
+        return {"doc_type": _DOC_TYPES[source]}
+    return {}
+
+
+def _hit(text, source, headers=None, score=0.5, **metadata):
+    """A canned Hit. Metadata defaults from the source name (see
+    _default_metadata) so tests read naturally -- `_hit(..., "sop_roads.md")`
+    is already filterable by `{"doc_type": "sop", "category": "ROADS"}` --
+    and any keyword argument here overrides a derived default.
+    """
+    meta = {**_default_metadata(source), "headers": headers or [], **metadata}
+    chunk = chunk_record(text, source, meta)[0]
     return Hit(chunk, score, "hybrid")
 
 
@@ -89,3 +112,26 @@ def test_no_evidence_says_so_rather_than_being_blank():
 
 def test_citation_is_source_alone_without_headers():
     assert RetrievedChunk(node="x", source="rate_card.md").citation == "rate_card.md"
+
+
+def test_the_fake_retriever_applies_filters_like_the_real_one():
+    retriever = FakeRetriever([
+        _hit("| asphalt | ₹450 |", "rate_card.md"),
+        _hit("SLA is 48 hours.", "sla_policy.md"),
+        _hit("Public Works owns roads.", "sop_roads.md"),
+    ])
+    result = retriever.search("q", filters={"doc_type": "rate_card"})
+    assert [h.chunk.source for h in result] == ["rate_card.md"]
+
+    result = retriever.search("q", filters=None)
+    assert len(result) == 3
+
+
+def test_hit_metadata_is_derived_from_the_source():
+    sop_hit = _hit("x", "sop_roads.md")
+    assert sop_hit.chunk.metadata["doc_type"] == "sop"
+    assert sop_hit.chunk.metadata["category"] == "ROADS"
+
+    case_hit = _hit("x", "case:1", category="ROADS")
+    assert case_hit.chunk.metadata["doc_type"] == "case"
+    assert case_hit.chunk.metadata["category"] == "ROADS"
