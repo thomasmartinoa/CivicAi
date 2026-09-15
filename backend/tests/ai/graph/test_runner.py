@@ -79,7 +79,7 @@ async def test_a_valid_complaint_gets_a_work_order(env):
     order = session.query(WorkOrder).one()
     assert order.sla_hours == 4
     assert order.sla_deadline is not None
-    assert order.estimated_cost > 0
+    assert order.cost_basis.startswith("estimate unavailable")
 
 
 async def test_a_rejected_complaint_is_stored_as_rejected(env):

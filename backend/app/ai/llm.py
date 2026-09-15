@@ -31,6 +31,7 @@ class Task(StrEnum):
     ASSESS_RISK = "assess_risk"
     VISION = "vision"
     NARRATE = "narrate"
+    WORK_ORDER = "work_order"
 
 
 # Model tiering: cheap models for the high-volume mechanical steps, a stronger
@@ -51,6 +52,7 @@ TASK_MODEL: dict[Task, str] = {
     Task.ASSESS_RISK: settings.gemini_model_strong,
     Task.VISION: settings.gemini_model,
     Task.NARRATE: settings.gemini_model_strong,
+    Task.WORK_ORDER: settings.gemini_model,
 }
 
 # One ceiling for the whole process. Not optional: the Gemini free tier

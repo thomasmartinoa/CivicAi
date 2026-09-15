@@ -29,7 +29,9 @@ def build_deps(session_factory: Callable, complaint) -> GraphDeps:
     dependencies pass their own GraphDeps instead of calling this.
     """
     from app.ai.llm import Task, build_structured
-    from app.ai.schemas import ClassificationResult, RiskAssessment, ValidationResult, VisionObservation
+    from app.ai.schemas import (
+        ClassificationResult, CostEstimate, RiskAssessment, ValidationResult, VisionObservation,
+    )
     from app.services.geocoding import reverse_geocode
     from app.services.notify import notify_citizen
 
@@ -42,6 +44,7 @@ def build_deps(session_factory: Callable, complaint) -> GraphDeps:
         classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify"),
         risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk"),
         vision_chain=_lazy_vision_chain(),
+        work_order_chain=build_structured(Task.WORK_ORDER, CostEstimate, "work_order"),
         policy_retriever=_POLICY_RETRIEVER,
         session_factory=session_factory,
         geocode=reverse_geocode,

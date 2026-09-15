@@ -5,7 +5,7 @@ from app.ai.prompts import LATEST, PROMPT_REGISTRY, get_prompt
 
 
 def test_every_expected_prompt_is_registered():
-    assert set(LATEST) == {"validate", "classify", "assess_risk", "vision"}
+    assert set(LATEST) == {"validate", "classify", "assess_risk", "vision", "work_order"}
 
 
 def test_get_prompt_returns_the_latest_version_by_default():
@@ -88,3 +88,14 @@ def test_vision_prompt_carries_an_image_block_not_a_plain_string():
     image_blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "image_url"]
     assert image_blocks, f"expected an image_url block, got: {content}"
     assert image_blocks[0]["image_url"]["url"] == tiny_png_data_url
+
+
+def test_the_work_order_prompt_receives_evidence_and_cites_it():
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("work_order")
+    assert set(prompt.input_variables) == {"category", "risk_level", "description", "evidence"}
+    rendered = prompt.format(category="ROADS", risk_level="high", description="x", evidence="[1] rate_card.md\n₹450")
+    assert "[1] rate_card.md" in rendered
+    assert "<report>" in rendered
+    assert "only" in rendered.lower() and "rate card" in rendered.lower()
