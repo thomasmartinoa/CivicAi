@@ -84,3 +84,44 @@ def test_jurisdiction_is_the_finest_level_available(make_config, base_state, see
 
     state = _state(base_state, tenant_id, location=LocationInfo(district="Bengaluru Urban"))
     assert route_node(state, config)["routing"].jurisdiction_level is JurisdictionLevel.DISTRICT
+
+
+def test_the_justification_cites_the_sop_and_the_scoring_policy(make_config, base_state, seeded, tenant_id):
+    from tests.ai.graph.test_retrieval import FakeRetriever, _hit
+
+    retriever = FakeRetriever([
+        _hit("Public Works Department owns this category citywide.", "sop_roads.md", ["Roads SOP", "Ownership"]),
+        _hit("Specialisation adds 40 points.", "contractor_scoring.md", ["Contractor Scoring", "Weights"]),
+    ])
+    state = {**base_state, "tenant_id": tenant_id,
+             "classification": ClassificationResult(category=Category.ROADS, confidence=0.9)}
+    update = route_node(state, make_config(session_factory=lambda: seeded, policy_retriever=retriever))
+
+    assert [c.source for c in update["evidence"]] == ["sop_roads.md", "contractor_scoring.md"]
+    assert all(c.node == "route" for c in update["evidence"])
+    justification = update["routing"].justification
+    assert "[1]" in justification and "[2]" in justification
+    assert "Public Works Department" in justification
+    # two searches: one SOP scoped to the category, one for the scoring policy
+    assert retriever.calls[0]["filters"] == {"doc_type": "sop", "category": "ROADS"}
+    assert retriever.calls[1]["filters"] == {"doc_type": "contractor_scoring"}
+
+
+def test_routing_still_works_without_a_retriever(make_config, base_state, seeded, tenant_id):
+    state = {**base_state, "tenant_id": tenant_id,
+             "classification": ClassificationResult(category=Category.ROADS, confidence=0.9)}
+    update = route_node(state, make_config(session_factory=lambda: seeded))
+    assert update["routing"].department_name == "Public Works Department"
+    assert update["evidence"] == []
+    assert any("retrieval unavailable" in e for e in update["errors"])
+
+
+def test_a_raising_retriever_is_a_soft_error_for_routing(make_config, base_state, seeded, tenant_id):
+    from tests.ai.graph.test_retrieval import FakeRetriever
+
+    state = {**base_state, "tenant_id": tenant_id,
+             "classification": ClassificationResult(category=Category.ROADS, confidence=0.9)}
+    config = make_config(session_factory=lambda: seeded, policy_retriever=FakeRetriever(raises=RuntimeError("boom")))
+    update = route_node(state, config)
+    assert update["routing"].department_id is not None
+    assert update["errors"] == ["route: retrieval unavailable: boom"]

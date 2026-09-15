@@ -8,7 +8,13 @@ from app.ai.schemas import RetrievedChunk
 
 
 class FakeRetriever:
-    """Records the call and returns canned hits. `.search` mirrors HybridRetriever."""
+    """Records each call and pages through canned hits, one slice per call.
+
+    Call N (0-indexed) returns `hits[N:N+k]`, so a caller that issues several
+    searches against one retriever -- one per document type, say -- can hand
+    each call its own canned hit instead of always seeing the first one.
+    `.search` mirrors HybridRetriever's signature.
+    """
 
     def __init__(self, hits=None, raises=None):
         self.hits = hits or []
@@ -16,10 +22,11 @@ class FakeRetriever:
         self.calls = []
 
     def search(self, query, *, k=5, fetch_k=50, filters=None):
+        start = len(self.calls)
         self.calls.append({"query": query, "k": k, "fetch_k": fetch_k, "filters": filters})
         if self.raises:
             raise self.raises
-        return self.hits[:k]
+        return self.hits[start:start + k]
 
 
 def _hit(text, source, headers=None, score=0.5):

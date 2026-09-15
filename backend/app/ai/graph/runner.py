@@ -42,7 +42,7 @@ def build_deps(session_factory: Callable, complaint) -> GraphDeps:
         classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify"),
         risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk"),
         vision_chain=_lazy_vision_chain(),
-        policy_retriever=LazyRetriever(_load_policy_retriever),
+        policy_retriever=_POLICY_RETRIEVER,
         session_factory=session_factory,
         geocode=reverse_geocode,
         notify=notify,
@@ -146,6 +146,13 @@ def _load_policy_retriever():
         embedder=build_embedder(),
         index_dir=collection_index_dir(settings.rag_index_path, COLLECTION),
     )
+
+
+# Module-level, not built fresh inside build_deps: build_deps runs once per
+# complaint, and loading the FAISS index is expensive, so it must happen at
+# most once per process. LazyRetriever only caches success, so a failed load
+# still retries on the next complaint rather than staying broken forever.
+_POLICY_RETRIEVER = LazyRetriever(_load_policy_retriever)
 
 
 def _state_for(complaint) -> ComplaintState:

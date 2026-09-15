@@ -379,7 +379,6 @@ async def test_streaming_with_empty_node_return_completes(env):
     assert session.query(Complaint).one().status == "assigned"
 
 
-@pytest.mark.xfail(strict=True, reason="route retrieves from Task 2")
 async def test_evidence_is_persisted_as_retrieved_chunk_rows(env):
     from app.db.models.ai import RetrievedChunk as RetrievedChunkRow
     from tests.ai.graph.test_retrieval import FakeRetriever, _hit
@@ -409,7 +408,6 @@ async def test_re_running_does_not_duplicate_retrieved_chunk_rows(env):
     assert session.query(RetrievedChunkRow).count() == first
 
 
-@pytest.mark.xfail(strict=True, reason="route retrieves from Task 2")
 async def test_a_broken_retriever_degrades_but_does_not_terminate(env):
     from tests.ai.graph.test_retrieval import FakeRetriever
 
