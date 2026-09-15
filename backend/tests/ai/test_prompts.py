@@ -50,7 +50,7 @@ def test_validate_prompt_declares_its_variables():
 
 def test_assess_risk_prompt_declares_its_variables():
     assert set(get_prompt("assess_risk").input_variables) == {
-        "description", "category", "media_context"
+        "description", "category", "media_context", "evidence"
     }
 
 
@@ -99,3 +99,13 @@ def test_the_work_order_prompt_receives_evidence_and_cites_it():
     assert "[1] rate_card.md" in rendered
     assert "<report>" in rendered
     assert "only" in rendered.lower() and "rate card" in rendered.lower()
+
+
+def test_assess_risk_v2_takes_evidence_and_is_the_default():
+    from app.ai.prompts import LATEST, get_prompt
+
+    assert LATEST["assess_risk"] == "v2"
+    v2 = get_prompt("assess_risk")
+    assert set(v2.input_variables) == {"category", "description", "media_context", "evidence"}
+    v1 = get_prompt("assess_risk", "v1")
+    assert "evidence" not in v1.input_variables, "v1 stays as the ungrounded baseline for the evals"
