@@ -2,6 +2,9 @@ import re
 
 from app.ai.graph.nodes.work_order import SLA_HOURS
 from app.ai.rag.chunking import CORPUS_DIR, chunk_markdown, load_corpus
+from app.ai.rag.embeddings import FakeEmbedder
+from app.ai.rag.retrievers import BM25Retriever, DenseRetriever, HybridRetriever
+from app.ai.rag.store import FaissStore
 from app.constants import CATEGORY_DEPARTMENT, Category
 from app.db.models.core import Department
 
@@ -109,3 +112,37 @@ def test_every_corpus_file_chunks_without_error_and_yields_something():
         chunks = chunk_markdown(text, path.name)
         assert chunks, f"{path.name} produced no chunks"
         assert all(c.text.strip() for c in chunks)
+
+
+def test_every_corpus_file_declares_a_doc_type():
+    """A category filter can't reach rate_card.md or contractor_scoring.md,
+    which carry no category. doc_type covers every file instead."""
+    specific = {
+        "rate_card.md": "rate_card",
+        "sla_policy.md": "sla_policy",
+        "category_taxonomy.md": "taxonomy",
+        "contractor_scoring.md": "contractor_scoring",
+    }
+    for path, text in load_corpus():
+        front_matter = text.split("---")[1]
+        assert "doc_type:" in front_matter, f"{path.name} missing doc_type"
+        if path.name.startswith("sop_"):
+            assert "doc_type: sop" in text, path.name
+        elif path.name in specific:
+            assert f"doc_type: {specific[path.name]}" in text, path.name
+
+
+def test_a_doc_type_filter_reaches_the_rate_card():
+    embedder = FakeEmbedder()
+    store = FaissStore(embedder)
+    all_chunks = []
+    for path, text in load_corpus():
+        all_chunks.extend(chunk_markdown(text, path.name))
+    store.add(all_chunks)
+    retriever = HybridRetriever(DenseRetriever(store), BM25Retriever(store.chunks))
+
+    hits = retriever.search("asphalt per square metre", k=3, fetch_k=200,
+                            filters={"doc_type": "rate_card"})
+
+    assert hits
+    assert all(h.chunk.source == "rate_card.md" for h in hits)

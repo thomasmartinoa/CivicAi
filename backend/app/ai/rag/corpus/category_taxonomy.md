@@ -1,6 +1,7 @@
 ---
 title: Category Taxonomy
 collection: policy
+doc_type: taxonomy
 ---
 
 # Category Taxonomy

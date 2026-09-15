@@ -1,6 +1,7 @@
 ---
 title: Municipal Rate Card
 collection: policy
+doc_type: rate_card
 ---
 
 # Municipal Rate Card

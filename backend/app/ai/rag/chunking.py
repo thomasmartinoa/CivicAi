@@ -41,9 +41,17 @@ def _parse_front_matter(text: str) -> tuple[dict, str]:
     return meta, text[match.end():]
 
 
-def _chunk_id(source: str, ordinal: int, text: str) -> str:
-    digest = hashlib.sha1(f"{source}:{ordinal}:{text}".encode()).hexdigest()[:12]
-    return f"{source}#{ordinal}-{digest}"
+def _chunk_id(source: str, headers: list[str], text: str) -> str:
+    """Hash source, header path and text — never an ordinal.
+
+    An ordinal is the document-global position of a chunk, so editing one
+    section renumbers every chunk after it even though their text never
+    changed. Phase 2b stores this id on `RetrievedChunk` rows, so a stable id
+    is what keeps a citation resolving after an unrelated edit elsewhere in
+    the document.
+    """
+    digest = hashlib.sha1(f"{source}|{'/'.join(headers)}|{text}".encode()).hexdigest()[:12]
+    return f"{source}#{digest}"
 
 
 def _split_long(text: str, max_chars: int, overlap: int) -> list[str]:
@@ -80,7 +88,6 @@ def chunk_markdown(
     front, body = _parse_front_matter(text)
     chunks: list[Chunk] = []
     header_path: list[str] = []
-    ordinal = 0
 
     # Walk sections: each header starts a new section; text before any header is one.
     positions = [(m.start(), m.end(), len(m.group(1)), m.group(2).strip()) for m in _HEADER.finditer(body)]
@@ -100,16 +107,15 @@ def chunk_markdown(
             chunks.append(Chunk(
                 text=piece,
                 source=source,
-                chunk_id=_chunk_id(source, ordinal, piece),
+                chunk_id=_chunk_id(source, header_path, piece),
                 metadata={**front, "headers": list(header_path)},
             ))
-            ordinal += 1
     return chunks
 
 
 def chunk_record(text: str, source: str, metadata: dict) -> list[Chunk]:
     """A case record is one chunk. Splitting it would separate cause from outcome."""
-    return [Chunk(text=text, source=source, chunk_id=_chunk_id(source, 0, text),
+    return [Chunk(text=text, source=source, chunk_id=_chunk_id(source, [], text),
                   metadata=dict(metadata))]
 
 

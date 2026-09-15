@@ -11,3 +11,6 @@ uploads/
 node_modules/
 .DS_Store
 *.db
+
+# The FAISS index (chunks.json, index.faiss, manifest.json per collection)
+backend/data/

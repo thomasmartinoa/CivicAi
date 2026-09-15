@@ -1,6 +1,7 @@
 ---
 title: Citywide SLA Policy
 collection: policy
+doc_type: sla_policy
 ---
 
 # Citywide SLA Policy

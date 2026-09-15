@@ -28,7 +28,9 @@ embedding model tag. SQLite remains the relational store.
   run so they cannot drift, at the cost of re-embedding unchanged text — which
   is why `Document.content_hash` skips the DB write but not the embed. Files
   removed from the corpus have their rows pruned on the next run, so deletion
-  cannot drift either.
+  cannot drift either. Each collection gets its own index directory
+  (`<rag_index_dir>/policy`, later `<rag_index_dir>/cases`), so rebuilding one
+  never touches the other.
 - **No concurrent writers.** One process rebuilds the index; readers load it.
 
 ## When to revisit

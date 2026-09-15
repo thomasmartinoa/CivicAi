@@ -51,6 +51,29 @@ def test_chunk_ids_are_stable_and_unique():
     assert len({c.chunk_id for c in a}) == len(a)
 
 
+def test_chunk_ids_survive_an_edit_to_an_earlier_section():
+    """A chunk id must depend only on its own header path and text, not on
+    where it falls in the document. Editing the Scope section must not
+    renumber the chunks that come after it."""
+    edited = SAMPLE.replace(
+        "Roads covers surface damage. A trench left by a utility is CONSTRUCTION.",
+        "Roads covers surface damage. A trench left by a utility is CONSTRUCTION. "
+        "This sentence was added later.",
+    )
+    assert edited != SAMPLE
+
+    before = chunk_markdown(SAMPLE, "sample.md")
+    after = chunk_markdown(edited, "sample.md")
+
+    before_ownership = next(c for c in before if "Public Works Department owns" in c.text)
+    after_ownership = next(c for c in after if "Public Works Department owns" in c.text)
+    assert before_ownership.chunk_id == after_ownership.chunk_id
+
+    before_response = next(c for c in before if "Critical within 4 hours" in c.text)
+    after_response = next(c for c in after if "Critical within 4 hours" in c.text)
+    assert before_response.chunk_id == after_response.chunk_id
+
+
 def test_a_record_is_exactly_one_chunk():
     chunks = chunk_record("Pothole near school, fixed in 2 days for 8000", "case:abc",
                           {"category": "ROADS", "district": "East"})

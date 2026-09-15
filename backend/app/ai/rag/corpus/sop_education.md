@@ -1,6 +1,7 @@
 ---
 title: Education Department — Government School Infrastructure SOP
 collection: policy
+doc_type: sop
 category: EDUCATION
 ---
 

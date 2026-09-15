@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 COLLECTION = "policy"
 
 
+def collection_index_dir(base: Path, collection: str) -> Path:
+    """Each collection gets its own subdirectory, so rebuilding one never touches another."""
+    return base / collection
+
+
 @dataclass
 class IngestReport:
     documents: int
@@ -127,7 +132,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     report = ingest_policy_corpus(
         embedder=build_embedder(),
-        index_dir=settings.rag_index_path,
+        index_dir=collection_index_dir(settings.rag_index_path, COLLECTION),
         session_factory=SessionLocal,
     )
     print(f"{report.documents} documents, {report.chunks} chunks -> {report.index_dir}")

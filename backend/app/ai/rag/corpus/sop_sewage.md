@@ -1,6 +1,7 @@
 ---
 title: Sanitation Department — Sewage and Drainage SOP
 collection: policy
+doc_type: sop
 category: SEWAGE
 ---
 

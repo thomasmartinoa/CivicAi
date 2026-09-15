@@ -1,6 +1,7 @@
 ---
 title: Sanitation Department — Solid Waste SOP
 collection: policy
+doc_type: sop
 category: SANITATION
 ---
 

@@ -1,6 +1,7 @@
 ---
 title: Public Works Department — Road Surface SOP
 collection: policy
+doc_type: sop
 category: ROADS
 ---
 

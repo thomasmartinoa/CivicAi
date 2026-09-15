@@ -1,6 +1,7 @@
 ---
 title: Water Supply Department — Potable Water SOP
 collection: policy
+doc_type: sop
 category: WATER
 ---
 

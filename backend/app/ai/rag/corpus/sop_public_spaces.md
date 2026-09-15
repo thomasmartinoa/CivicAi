@@ -1,6 +1,7 @@
 ---
 title: Parks & Recreation — Public Spaces SOP
 collection: policy
+doc_type: sop
 category: PUBLIC_SPACES
 ---
 

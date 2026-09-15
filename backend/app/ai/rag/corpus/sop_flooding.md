@@ -1,6 +1,7 @@
 ---
 title: Flood Control Authority — Waterlogging and Drainage SOP
 collection: policy
+doc_type: sop
 category: FLOODING
 ---
 

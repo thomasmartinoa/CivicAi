@@ -1,6 +1,7 @@
 ---
 title: Health Department — Public Health Hazard SOP
 collection: policy
+doc_type: sop
 category: HEALTH
 ---
 

@@ -4,8 +4,14 @@ import pytest
 
 from app.ai.rag.chunking import CORPUS_DIR
 from app.ai.rag.embeddings import FakeEmbedder
-from app.ai.rag.ingest import IngestReport, ingest_policy_corpus, load_policy_retriever
+from app.ai.rag.ingest import (
+    IngestReport, collection_index_dir, ingest_policy_corpus, load_policy_retriever,
+)
 from app.db.models.ai import Document, DocumentChunk
+
+
+def test_collection_index_dir_nests_by_collection():
+    assert collection_index_dir(Path("/x"), "policy") == Path("/x/policy")
 
 
 def _mini_corpus(tmp_path: Path) -> Path:

@@ -1,6 +1,7 @@
 ---
 title: Fire Department — Fire Hazard SOP
 collection: policy
+doc_type: sop
 category: FIRE_HAZARD
 ---
 

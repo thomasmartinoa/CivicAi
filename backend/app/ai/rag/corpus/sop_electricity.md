@@ -1,6 +1,7 @@
 ---
 title: Electricity Board — Power Infrastructure SOP
 collection: policy
+doc_type: sop
 category: ELECTRICITY
 ---
 

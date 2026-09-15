@@ -1,6 +1,7 @@
 ---
 title: Contractor Scoring Policy
 collection: policy
+doc_type: contractor_scoring
 ---
 
 # Contractor Scoring Policy

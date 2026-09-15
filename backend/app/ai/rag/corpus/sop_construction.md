@@ -1,6 +1,7 @@
 ---
 title: Public Works Department — Construction and Excavation SOP
 collection: policy
+doc_type: sop
 category: CONSTRUCTION
 ---
 

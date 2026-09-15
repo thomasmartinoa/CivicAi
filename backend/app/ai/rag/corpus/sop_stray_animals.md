@@ -1,6 +1,7 @@
 ---
 title: Animal Control — Stray Animal SOP
 collection: policy
+doc_type: sop
 category: STRAY_ANIMALS
 ---
 
