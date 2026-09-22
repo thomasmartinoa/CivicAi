@@ -11,6 +11,7 @@ methods.
 """
 
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.rate_limiters import InMemoryRateLimiter
@@ -19,6 +20,9 @@ from pydantic import BaseModel
 
 from app.ai.prompts import get_prompt
 from app.config import settings
+
+if TYPE_CHECKING:
+    from app.ai.cache import SemanticCache
 
 
 class NoModelConfigured(RuntimeError):
@@ -144,14 +148,51 @@ def build_structured(
     schema: type[BaseModel],
     prompt_name: str,
     prompt_version: str | None = None,
+    *,
+    cache: "SemanticCache | None" = None,
 ) -> Runnable:
     """A prompt-to-validated-object chain, ready to hand a node.
 
     Nodes get one of these through `config["configurable"]`; a test passes a
     `RunnableLambda` returning a fixture instead. That seam is the whole reason
     nodes never touch a raw model.
+
+    With a cache, the whole chain (prompt and model) sits behind the semantic
+    lookup, keyed on the prompt variables — so the cache sees the same text
+    whichever prompt version is active.
     """
     model = build_chat_model(task)
-    return get_prompt(prompt_name, prompt_version) | model.with_structured_output(
+    chain = get_prompt(prompt_name, prompt_version) | model.with_structured_output(
         schema
     ).with_retry(stop_after_attempt=3)
+    if cache is None:
+        return chain
+
+    from app.ai.cache import with_semantic_cache
+
+    return with_semantic_cache(chain, cache)
+
+
+# One process-wide cache per chain, built on first use. Keyed by prompt name,
+# never shared between chains: a classification must not be served as a risk
+# assessment.
+_CACHES: dict[str, "SemanticCache"] = {}
+
+
+def cache_for(prompt_name: str) -> "SemanticCache | None":
+    """The cache for one chain, or None when caching is off or no embedder is
+    configured. Never raises: a cache is an optimisation, and an unconfigured
+    embedder must not take down every chain in the process."""
+    if not settings.semantic_cache_enabled:
+        return None
+    if prompt_name not in _CACHES:
+        from app.ai.cache import SemanticCache
+        from app.ai.rag import embeddings
+
+        try:
+            _CACHES[prompt_name] = SemanticCache(
+                embeddings.build_embedder(), threshold=settings.semantic_cache_threshold
+            )
+        except embeddings.NoEmbedderConfigured:
+            return None
+    return _CACHES[prompt_name]

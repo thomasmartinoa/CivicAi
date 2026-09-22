@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # ── RAG ───────────────────────────────────────────────
     embedding_model: str = "gemini-embedding-001"
     rag_index_dir: str = "./data/index"
+    # A near-duplicate prompt reuses the previous completion instead of paying
+    # for another model call. 0.95 cosine is tight enough that only genuine
+    # restatements hit; see app/ai/cache.py.
+    semantic_cache_enabled: bool = True
+    semantic_cache_threshold: float = 0.95
 
     # ── Storage ───────────────────────────────────────────────
     upload_dir: str = "./uploads"

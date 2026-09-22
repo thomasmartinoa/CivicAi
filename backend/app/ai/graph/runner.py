@@ -28,7 +28,7 @@ def build_deps(session_factory: Callable, complaint) -> GraphDeps:
     the notify node doesn't know the recipient. Tests that need to override
     dependencies pass their own GraphDeps instead of calling this.
     """
-    from app.ai.llm import Task, build_structured
+    from app.ai.llm import Task, build_structured, cache_for
     from app.ai.schemas import (
         ClassificationResult, CostEstimate, RiskAssessment, ValidationResult, VisionObservation,
     )
@@ -40,12 +40,19 @@ def build_deps(session_factory: Callable, complaint) -> GraphDeps:
         notify_citizen(recipient=complaint_email, session_factory=session_factory, **kwargs)
 
     return GraphDeps(
-        validate_chain=build_structured(Task.VALIDATE, ValidationResult, "validate"),
-        classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify"),
-        investigate_chain=build_structured(Task.INVESTIGATE, ClassificationResult, "investigate"),
-        risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk"),
+        validate_chain=build_structured(Task.VALIDATE, ValidationResult, "validate",
+                                        cache=cache_for("validate")),
+        classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify",
+                                        cache=cache_for("classify")),
+        investigate_chain=build_structured(Task.INVESTIGATE, ClassificationResult, "investigate",
+                                           cache=cache_for("investigate")),
+        risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk",
+                                    cache=cache_for("assess_risk")),
+        # Vision is multimodal -- the payload carries a base64 image, not prose --
+        # so it is not cached.
         vision_chain=_lazy_vision_chain(),
-        work_order_chain=build_structured(Task.WORK_ORDER, CostEstimate, "work_order"),
+        work_order_chain=build_structured(Task.WORK_ORDER, CostEstimate, "work_order",
+                                          cache=cache_for("work_order")),
         policy_retriever=_POLICY_RETRIEVER,
         cases_retriever=_cases_retriever_if_present(),
         session_factory=session_factory,
@@ -94,7 +101,7 @@ def _vision_chain():
     """Wire `_media_to_prompt_vars` in front of the vision LLM chain."""
     from langchain_core.runnables import RunnableLambda
 
-    from app.ai.llm import Task, build_structured
+    from app.ai.llm import Task, build_structured, cache_for
     from app.ai.schemas import VisionObservation
 
     return RunnableLambda(_media_to_prompt_vars) | build_structured(
