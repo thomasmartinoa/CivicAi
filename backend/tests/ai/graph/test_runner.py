@@ -39,14 +39,20 @@ def env(db_session):
 
 
 def _deps(*, valid=True, notified=None, **over):
-    return GraphDeps(
+    """The happy-path chains, with `over` replacing any of them.
+
+    `over` is merged rather than splatted alongside the defaults: a test that
+    needs its own classify_chain -- an unsure one, say -- would otherwise get
+    "multiple values for keyword argument" instead of the override it asked for.
+    """
+    defaults = dict(
         validate_chain=returns(ValidationResult(is_valid=valid, rejection_reason=None if valid else "a neighbour dispute")),
         classify_chain=returns(ClassificationResult(category=Category.ROADS, confidence=0.93)),
         risk_chain=returns(RiskAssessment(priority_score=80, risk_level=RiskLevel.CRITICAL)),
         vision_chain=returns(VisionObservation(text="a pothole", shows_infrastructure_problem=True)),
         notify=(lambda **kw: notified.append(kw)) if notified is not None else (lambda **kw: None),
-        **over,
     )
+    return GraphDeps(**{**defaults, **over})
 
 
 async def _run(session, complaint, deps):
@@ -467,4 +473,44 @@ async def test_streaming_observer_exception_does_not_fail_the_run(env):
     assert state["complaint_id"] == complaint.id
     run = session.query(AgentRun).one()
     assert run.status == "completed"
+    assert session.query(Complaint).one().status == "assigned"
+
+
+async def test_an_unsure_classification_is_investigated_end_to_end(env):
+    from app.ai.graph.build import GRAPH_VERSION
+    from tests.ai.graph.test_retrieval import FakeRetriever, _hit
+
+    session, complaint = env
+    retriever = FakeRetriever([_hit("A trench left by a utility is CONSTRUCTION.", "category_taxonomy.md", ["Category Taxonomy", "ROADS"])])
+    deps = _deps(
+        session_factory=lambda: session,
+        policy_retriever=retriever,
+        classify_chain=returns(ClassificationResult(category=Category.ROADS, confidence=0.4)),
+        investigate_chain=returns(ClassificationResult(category=Category.CONSTRUCTION, confidence=0.9)),
+    )
+    await _run(session, complaint, deps)
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.category == Category.CONSTRUCTION.value
+    assert stored.classification_confidence == 0.9
+    assert stored.pipeline_version == GRAPH_VERSION
+    steps = [s.node for s in session.query(AgentStep).order_by(AgentStep.seq)]
+    assert steps.count("investigate") == 1
+    assert steps.index("investigate") < steps.index("assess_risk")
+
+
+async def test_investigation_stops_after_three_turns(env):
+    from tests.ai.graph.test_retrieval import FakeRetriever
+
+    session, complaint = env
+    deps = _deps(
+        session_factory=lambda: session,
+        policy_retriever=FakeRetriever(),
+        classify_chain=returns(ClassificationResult(category=Category.ROADS, confidence=0.4)),
+        investigate_chain=returns(ClassificationResult(category=Category.ROADS, confidence=0.5)),
+    )
+    await _run(session, complaint, deps)
+    session.expire_all()
+    steps = [s.node for s in session.query(AgentStep).order_by(AgentStep.seq)]
+    assert steps.count("investigate") == 3
     assert session.query(Complaint).one().status == "assigned"

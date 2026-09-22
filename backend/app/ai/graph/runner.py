@@ -42,6 +42,7 @@ def build_deps(session_factory: Callable, complaint) -> GraphDeps:
     return GraphDeps(
         validate_chain=build_structured(Task.VALIDATE, ValidationResult, "validate"),
         classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify"),
+        investigate_chain=build_structured(Task.INVESTIGATE, ClassificationResult, "investigate"),
         risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk"),
         vision_chain=_lazy_vision_chain(),
         work_order_chain=build_structured(Task.WORK_ORDER, CostEstimate, "work_order"),

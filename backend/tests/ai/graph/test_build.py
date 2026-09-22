@@ -37,13 +37,13 @@ def test_every_node_can_reach_end():
 
 def test_the_expected_nodes_are_present():
     nodes = set(compile_graph().get_graph().nodes)
-    assert {"intake", "analyse_media", "validate", "classify",
+    assert {"intake", "analyse_media", "validate", "classify", "investigate",
             "assess_risk", "route", "work_order", "notify"} <= nodes
 
 
 def test_graph_version_is_recorded():
     """Stamped onto every AgentRun so a trace can be tied back to a graph shape."""
-    assert GRAPH_VERSION
+    assert GRAPH_VERSION == "2b.0"
 
 
 def test_llm_nodes_carry_a_retry_policy():
@@ -53,7 +53,8 @@ def test_llm_nodes_carry_a_retry_policy():
     chain itself (see build_structured). This policy is kept because it is
     harmless and still covers a node raising for some other reason."""
     builder = build_graph()
-    for name in ("validate", "classify", "assess_risk", "analyse_media"):
+    for name in ("validate", "classify", "investigate", "assess_risk",
+                 "work_order", "analyse_media"):
         assert builder.nodes[name].retry_policy, f"{name} has no retry policy"
 
 
@@ -63,5 +64,5 @@ def test_non_model_nodes_carry_no_retry_policy():
     written yet on the retry. A retry policy here would double-send the citizen
     notification and the guard could not catch it."""
     builder = build_graph()
-    for name in ("intake", "route", "work_order", "notify"):
+    for name in ("intake", "route", "notify"):
         assert not builder.nodes[name].retry_policy, f"{name} must not retry"

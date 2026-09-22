@@ -5,7 +5,8 @@ from app.ai.prompts import LATEST, PROMPT_REGISTRY, get_prompt
 
 
 def test_every_expected_prompt_is_registered():
-    assert set(LATEST) == {"validate", "classify", "assess_risk", "vision", "work_order"}
+    assert set(LATEST) == {"validate", "classify", "investigate", "assess_risk",
+                           "vision", "work_order"}
 
 
 def test_get_prompt_returns_the_latest_version_by_default():
@@ -109,3 +110,16 @@ def test_assess_risk_v2_takes_evidence_and_is_the_default():
     assert set(v2.input_variables) == {"category", "description", "media_context", "evidence"}
     v1 = get_prompt("assess_risk", "v1")
     assert "evidence" not in v1.input_variables, "v1 stays as the ungrounded baseline for the evals"
+
+
+def test_the_investigate_prompt_sees_the_first_pass_and_the_evidence():
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("investigate")
+    assert set(prompt.input_variables) == {
+        "description", "media_context", "previous_category", "previous_confidence", "evidence"
+    }
+    rendered = prompt.format(description="a trench", media_context="", previous_category="ROADS",
+                             previous_confidence=0.4, evidence="[1] category_taxonomy.md\nCONSTRUCTION owns excavation")
+    assert "[1] category_taxonomy.md" in rendered
+    assert "<evidence>" in rendered and "<report>" in rendered

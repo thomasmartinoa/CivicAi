@@ -28,6 +28,7 @@ class NoModelConfigured(RuntimeError):
 class Task(StrEnum):
     VALIDATE = "validate"
     CLASSIFY = "classify"
+    INVESTIGATE = "investigate"
     ASSESS_RISK = "assess_risk"
     VISION = "vision"
     NARRATE = "narrate"
@@ -49,6 +50,7 @@ class Task(StrEnum):
 TASK_MODEL: dict[Task, str] = {
     Task.VALIDATE: settings.gemini_model,
     Task.CLASSIFY: settings.gemini_model,
+    Task.INVESTIGATE: settings.gemini_model_strong,
     Task.ASSESS_RISK: settings.gemini_model_strong,
     Task.VISION: settings.gemini_model,
     Task.NARRATE: settings.gemini_model_strong,

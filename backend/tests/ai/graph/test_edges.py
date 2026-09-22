@@ -1,6 +1,8 @@
 from langgraph.graph import END
 
-from app.ai.graph.edges import CONFIDENCE_THRESHOLD, after_validate
+from app.ai.graph.edges import (
+    CONFIDENCE_THRESHOLD, MAX_INVESTIGATE_TURNS, after_classify, after_validate,
+)
 from app.ai.schemas import ValidationResult
 
 
@@ -32,6 +34,16 @@ def test_missing_validation_ends_rather_than_continuing():
 
 def test_the_confidence_threshold_is_a_named_constant():
     assert 0.0 < CONFIDENCE_THRESHOLD < 1.0
+
+
+def test_the_investigate_loop_is_bounded():
+    """An unbounded loop over a model that stays unsure never reaches route."""
+    assert MAX_INVESTIGATE_TURNS >= 1
+
+
+def test_an_unclassified_complaint_never_reaches_investigation():
+    """Fail closed: investigate reads the previous classification."""
+    assert after_classify(_state()) == END
 
 
 def test_a_failed_risk_assessment_does_not_reach_the_work_order():
