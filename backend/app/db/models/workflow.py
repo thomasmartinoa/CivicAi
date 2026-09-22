@@ -24,6 +24,9 @@ class WorkOrder(Base):
     sla_deadline: Mapped[datetime | None] = mapped_column(DateTime, index=True)
     sla_hours: Mapped[int | None] = mapped_column(Integer)
     estimated_cost: Mapped[float | None] = mapped_column(Float)
+    # Filled in when the work order is completed. This, not the estimate, is
+    # what a case record teaches the risk and cost nodes.
+    actual_cost: Mapped[float | None] = mapped_column(Float)
     # Where the cost estimate came from, so the UI can cite it. v1 used a
     # hardcoded per-category dict and recorded nothing.
     cost_basis: Mapped[str | None] = mapped_column(Text)
@@ -39,6 +42,9 @@ class WorkOrder(Base):
     completion_photo: Mapped[str | None] = mapped_column(String(500))
 
     complaint: Mapped["Complaint"] = relationship(back_populates="work_order")
+    # Read-only convenience for the case records: they name the crew that did
+    # the work. No back_populates -- Contractor does not need the reverse side.
+    contractor: Mapped["Contractor | None"] = relationship()
 
 
 class Escalation(Base):

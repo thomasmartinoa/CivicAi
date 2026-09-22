@@ -47,6 +47,7 @@ def build_deps(session_factory: Callable, complaint) -> GraphDeps:
         vision_chain=_lazy_vision_chain(),
         work_order_chain=build_structured(Task.WORK_ORDER, CostEstimate, "work_order"),
         policy_retriever=_POLICY_RETRIEVER,
+        cases_retriever=_cases_retriever_if_present(),
         session_factory=session_factory,
         geocode=reverse_geocode,
         notify=notify,
@@ -152,11 +153,41 @@ def _load_policy_retriever():
     )
 
 
+def _load_cases_retriever():
+    from app.ai.rag.cases import CASES_COLLECTION, load_cases_retriever
+    from app.ai.rag.embeddings import build_embedder
+    from app.ai.rag.ingest import collection_index_dir
+    from app.config import settings
+
+    return load_cases_retriever(
+        embedder=build_embedder(),
+        index_dir=collection_index_dir(settings.rag_index_path, CASES_COLLECTION),
+    )
+
+
 # Module-level, not built fresh inside build_deps: build_deps runs once per
 # complaint, and loading the FAISS index is expensive, so it must happen at
 # most once per process. LazyRetriever only caches success, so a failed load
 # still retries on the next complaint rather than staying broken forever.
 _POLICY_RETRIEVER = LazyRetriever(_load_policy_retriever)
+_CASES_RETRIEVER = LazyRetriever(_load_cases_retriever)
+
+
+def _cases_retriever_if_present():
+    """None when no cases index exists yet — that is normal before the first
+    resolution and must not be reported as an error by assess_risk.
+
+    The existence check runs per complaint (one stat call) but hands back the
+    one module-level LazyRetriever, so the index is still loaded at most once
+    per process, and an ingest that lands mid-process is picked up.
+    """
+    from app.ai.rag.cases import CASES_COLLECTION
+    from app.ai.rag.ingest import collection_index_dir
+    from app.config import settings
+
+    if not (collection_index_dir(settings.rag_index_path, CASES_COLLECTION) / "manifest.json").exists():
+        return None
+    return _CASES_RETRIEVER
 
 
 def _state_for(complaint) -> ComplaintState:
