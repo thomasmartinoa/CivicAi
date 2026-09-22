@@ -55,7 +55,20 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("startup resume sweep failed; continuing anyway")
 
+    scheduler = None
+    if settings.background_jobs_enabled:
+        from app.services.scheduler import build_scheduler
+
+        scheduler = build_scheduler(SessionLocal)
+        scheduler.start()
+        logger.info("background jobs started")
+
     yield
+
+    if scheduler is not None:
+        # wait=False: shutdown runs while the event loop is closing, and a
+        # tick in flight must not hold it open.
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(

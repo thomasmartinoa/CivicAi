@@ -32,6 +32,9 @@ def client(db_session, tmp_path, monkeypatch):
 
     monkeypatch.setattr(media_module, "UPLOAD_ROOT", tmp_path)
     monkeypatch.setattr(settings, "secret_key", "test-secret-key-not-the-placeholder")
+    # The TestClient runs lifespan for real; a scheduler thread must not
+    # outlive the test that started it.
+    monkeypatch.setattr(settings, "background_jobs_enabled", False)
     monkeypatch.setattr(main_module, "SessionLocal", lambda: db_session)
     app.dependency_overrides[get_db] = lambda: db_session
     seed_database(db_session)

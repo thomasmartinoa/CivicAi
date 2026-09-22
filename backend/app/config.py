@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     # restatements hit; see app/ai/cache.py.
     semantic_cache_enabled: bool = True
     semantic_cache_threshold: float = 0.95
+    # The SLA monitor and anything else on a timer. Off in tests, which run
+    # the app's lifespan for real and must not leave a scheduler behind.
+    background_jobs_enabled: bool = True
 
     # ── Storage ───────────────────────────────────────────────
     upload_dir: str = "./uploads"

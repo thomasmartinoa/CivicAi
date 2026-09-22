@@ -20,6 +20,9 @@ def client(monkeypatch, db_session):
     """
     import app.main as main_module
     monkeypatch.setattr(settings, "secret_key", "test-secret-key-not-the-placeholder")
+    # The TestClient runs lifespan for real; a scheduler thread must not
+    # outlive the test that started it.
+    monkeypatch.setattr(settings, "background_jobs_enabled", False)
     monkeypatch.setattr(main_module, "SessionLocal", lambda: db_session)
     with TestClient(app) as c:
         yield c
@@ -83,6 +86,9 @@ def test_lifespan_sweep_resumes_submitted_complaints(db_session, monkeypatch):
     db_session.commit()
 
     monkeypatch.setattr(settings, "secret_key", "test-secret-key-not-the-placeholder")
+    # The TestClient runs lifespan for real; a scheduler thread must not
+    # outlive the test that started it.
+    monkeypatch.setattr(settings, "background_jobs_enabled", False)
     monkeypatch.setattr(main_module, "SessionLocal", lambda: db_session)
 
     # Capture schedule_complaint_run calls
