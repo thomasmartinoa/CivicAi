@@ -2580,6 +2580,14 @@ below come from reading the finished code, not from a review.
   of `complaint.evidence`. `source` and `headers` are both stored, so it is
   reconstructible; make it a `computed_field` if the Phase 5 UI would rather read
   the string directly than rebuild it.
+- **One hardcoded lookup dict survived.** `SLA_HOURS` in
+  `app/ai/graph/nodes/work_order.py` still maps risk level to hours in code,
+  while the same numbers sit in `Tenant.config["sla_hours"]` (seeded) and in
+  `corpus/sla_policy.md`. Spec §11 criterion 3 names SLA windows alongside cost,
+  so this phase's headline claim — "no hardcoded lookup dictionaries remain in
+  the decision path" — is not yet true. It cannot simply be asked of a model: the
+  window sets a deadline an email goes out about, so it must stay deterministic.
+  Phase 2c Task 2 moves it to the tenant config with the policy document cited.
 - **None of this is exposed over HTTP yet.** No route returns `evidence`,
   `retrieved_chunks`, escalations or cache statistics.
 
