@@ -2542,3 +2542,107 @@ ward → block → district → city ladder from wherever the complaint already 
 - [ ] The API boots with no index and logs one warning naming the ingest command
 
 **Next:** Phase 2c — semantic cluster detection (hourly), the grounded daily briefing chain, and the officer email-draft chain. Then Phase 3 — evals with the v1/v2 prompt baselines this phase kept registered.
+
+## Carried forward from Phase 2b (recorded 2026-09-27)
+
+Phase 2b landed in nine commits (1626aef..781f8ef), 376 tests, no network in the
+suite, `git status --porcelain` empty. The plan projected 367; the extra nine are
+cases pruning, cache fallbacks, a failed-email SLA path and a few edge tests the
+tasks turned out to need.
+
+**Review status is uneven, and the next phase should know it.** Tasks 1–4 were
+reviewed in isolation as they landed. Tasks 5–8 were implemented in one sitting
+against the plan's own tests and have had no independent review pass. The items
+below come from reading the finished code, not from a review.
+
+**What Phase 2c must do at the seam**
+- **Cases are tenant-blind.** `case_record_metadata` carries no `tenant_id`, one
+  `cases` index holds every tenant's records, and `assess_risk` filters only on
+  `{"category": ...}`. A precedent from another municipality can therefore ground
+  a risk score. Add `tenant_id` to the metadata and filter on it (or give each
+  tenant its own index directory) before this is deployed for more than one body.
+  No Phase 2b test catches it: the fixture database has a single tenant.
+- **Nothing writes `WorkOrder.actual_cost`.** The column and migration exist;
+  `case_record_text` falls back to `estimated_cost`, so precedent currently
+  teaches the estimate rather than the outcome. Whatever marks a work order
+  completed — Phase 5's officer screen, or a completion endpoint — must set it.
+- **Nothing refreshes the `cases` index.** `ingest_cases` is CLI-only, so a
+  resolved complaint is not precedent until a human runs it. Phase 2c adds
+  scheduled jobs; a cases refresh belongs beside them. It must not run in the
+  same process as live queries — `FaissStore.save` rewrites the directory, and
+  Phase 2a's concurrency note allows concurrent reads only.
+- **`retrieved_chunks` still stores only the derived `chunk_id`**, plus source,
+  score and snippet — not `DocumentChunk.id`, and not `headers`. Phase 2a's first
+  carry-forward item is therefore still open: there is no durable join key from a
+  stored citation back to the indexed row. `complaint.evidence` JSON does carry
+  the headers; the table does not.
+- **`RetrievedChunk.citation` is a `@property`**, so `model_dump()` leaves it out
+  of `complaint.evidence`. `source` and `headers` are both stored, so it is
+  reconstructible; make it a `computed_field` if the Phase 5 UI would rather read
+  the string directly than rebuild it.
+- **None of this is exposed over HTTP yet.** No route returns `evidence`,
+  `retrieved_chunks`, escalations or cache statistics.
+
+**Semantic cache**
+- **Keyed on prompt variables, never on the prompt version.** `("classify", "v1")`
+  and `("classify", "v2")` share one cache under the name `"classify"`, so a
+  Phase 3 eval sweep that A/Bs two prompt versions inside one process will serve
+  v2's answer to v1's prompt. Either key on `(name, version)` or give each eval
+  arm its own cache — the eval harness must not call `cache_for`.
+- **A hit returns the same object every time.** Nothing mutates a chain result
+  today; a node that did would poison the cache for the rest of the process.
+- `_CACHES` is module-level and never cleared, so a test that changes
+  `semantic_cache_enabled` or the embedder must reset `llm._CACHES` to see it.
+- A stored `None` is indistinguishable from a miss. Structured chains return
+  models, so this cannot bite yet.
+- In memory, per process, lost on restart, by design. `hits`/`misses` are
+  counters nothing reads yet.
+
+**Investigate loop**
+- Only the taxonomy retrieval's error is recorded; a failed SOP-scope retrieval
+  is dropped silently. Deliberate — the taxonomy is the load-bearing half — but
+  asymmetric with every other node's error handling.
+- Each turn widens `k` but re-runs the same query text. Widening the *query* (the
+  previous category's hand-off rules, for instance) is the obvious improvement
+  and a Phase 3 eval question.
+- The model's own reported confidence gates the loop, so a confidently wrong
+  classification is never investigated. Nothing measures calibration until
+  Phase 3.
+
+**SLA monitor**
+- **Tenant-blind and unbounded.** Every tick queries every open work order in the
+  database, and a breached order stays in that query forever — the dedupe row
+  makes the revisit a no-op, not free. Scope by tenant and give the ladder a
+  terminal state once it reaches `city`.
+- `_escalate_and_reassign` takes `max(score_contractor(...))` over every other
+  contractor in the tenant. Specialisation adds weight but does not gate, so when
+  every specialist is loaded the work can land on a contractor with no relevant
+  specialisation. v1 had the same shape; fixing it is a scoring change, not an
+  SLA change.
+- Reassignment adjusts `active_workload` but writes no audit row, and notifies
+  only the citizen. Neither the officer nor the new contractor hears anything;
+  the `Escalation` row is the only record.
+- A breach changes neither `Complaint.status` nor the work order's status. The
+  ladder position lives only in `escalations`.
+- `_claim` calls `session.rollback()` on the duplicate-key path, which would
+  discard any other uncommitted work in that session. Safe as written — each
+  action commits before the next claim — but a future change that batches ticks
+  must revisit it.
+- `build_scheduler` runs jobs in the API process, so N uvicorn workers means N
+  schedulers each running every job. The module docstring says so; nothing
+  enforces it. A distributed lock or a separate worker process is the fix if the
+  deployment ever grows a second worker.
+
+**Deviations from the plan as written**
+- `_cases_retriever_if_present()` returns a module-level `LazyRetriever` rather
+  than constructing one per call. `build_deps` runs once per complaint, so the
+  plan's version would have reloaded the index for every complaint.
+- `tests/ai/graph/test_runner.py::_deps` now merges `**over` into a defaults dict
+  instead of splatting both into `GraphDeps(...)`. As written, any test
+  overriding a chain the helper already supplied raised `TypeError: got multiple
+  values for keyword argument`.
+- `.env.example` gained `SEMANTIC_CACHE_ENABLED`, `SEMANTIC_CACHE_THRESHOLD` and
+  `BACKGROUND_JOBS_ENABLED`; `test_config.py::test_every_settings_field_is_documented_in_env_example`
+  requires every settings field to appear there, which the plan did not mention.
+- `tests/api/test_health.py` has two lifespan-running client fixtures of its own,
+  not just the one in `tests/api/conftest.py`; all three disable background jobs.
