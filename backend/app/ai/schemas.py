@@ -204,3 +204,14 @@ class BriefingNarrative(BaseModel):
                                   description="At most three things to act on today, most urgent first")
     citations: list[str] = Field(default_factory=list,
                                  description="The evidence items relied on, as 'source › header' strings")
+
+
+class EmailDraft(BaseModel):
+    """The officer's outgoing email to the owning department. A scheduled/service
+    chain's output, never in ComplaintState, so it is not in
+    CHECKPOINT_ALLOWLIST."""
+
+    subject: str = Field(description="One line, naming the tracking id and what is wrong")
+    body: str = Field(description="The email itself, formal, citing the SOP clause as [n]")
+    citations: list[str] = Field(default_factory=list,
+                                 description="The evidence items relied on, as 'source › header' strings")

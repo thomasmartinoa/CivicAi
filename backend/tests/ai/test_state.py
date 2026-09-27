@@ -7,7 +7,7 @@ from app.ai import schemas as schemas_module
 from app.ai.graph.state import (
     CHECKPOINT_ALLOWLIST, ComplaintState, build_serializer, initial_state,
 )
-from app.ai.schemas import BriefingNarrative, CostEstimate, Coords, MediaRef
+from app.ai.schemas import BriefingNarrative, CostEstimate, Coords, EmailDraft, MediaRef
 
 
 ACCUMULATING = ["media_insights", "evidence", "decision_log", "errors"]
@@ -63,14 +63,14 @@ def test_checkpoint_allowlist_covers_every_pydantic_model_in_schemas():
 
     Two classes are deliberately excluded. CostEstimate is the rate-card
     chain's return type, folded into WorkOrderDraft by the node before anything
-    reaches ComplaintState. BriefingNarrative belongs to a scheduled job, not to
-    the graph, and never enters state at all. Neither round-trips through a
+    reaches ComplaintState. BriefingNarrative and EmailDraft belong to services
+    outside the graph and never enter state at all. Neither round-trips through a
     checkpoint (see their docstrings in app.ai.schemas)."""
     defined = {
         obj for obj in vars(schemas_module).values()
         if isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel
     }
-    not_checkpointed = {CostEstimate, BriefingNarrative}
+    not_checkpointed = {CostEstimate, BriefingNarrative, EmailDraft}
     missing = defined - set(CHECKPOINT_ALLOWLIST) - not_checkpointed
     assert not missing, f"not in CHECKPOINT_ALLOWLIST: {sorted(c.__name__ for c in missing)}"
 

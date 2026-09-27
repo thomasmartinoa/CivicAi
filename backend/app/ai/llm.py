@@ -36,6 +36,7 @@ class Task(StrEnum):
     ASSESS_RISK = "assess_risk"
     VISION = "vision"
     NARRATE = "narrate"
+    EMAIL_DRAFT = "email_draft"
     WORK_ORDER = "work_order"
 
 
@@ -58,6 +59,8 @@ TASK_MODEL: dict[Task, str] = {
     Task.ASSESS_RISK: settings.gemini_model_strong,
     Task.VISION: settings.gemini_model,
     Task.NARRATE: settings.gemini_model_strong,
+    # Prose an officer signs their name to, so the strong tier like NARRATE.
+    Task.EMAIL_DRAFT: settings.gemini_model_strong,
     Task.WORK_ORDER: settings.gemini_model,
 }
 

@@ -6,7 +6,8 @@ from app.ai.prompts import LATEST, PROMPT_REGISTRY, get_prompt
 
 def test_every_expected_prompt_is_registered():
     assert set(LATEST) == {"validate", "classify", "investigate", "assess_risk",
-                           "vision", "work_order", "work_order_cluster", "briefing"}
+                           "vision", "work_order", "work_order_cluster", "briefing",
+                           "email_draft"}
 
 
 def test_get_prompt_returns_the_latest_version_by_default():
@@ -153,3 +154,18 @@ def test_the_briefing_prompt_is_told_not_to_recompute_the_numbers():
                              cluster_list="none", evidence="[1] sla_policy.md › Response windows")
     assert "do not recompute" in rendered.lower()
     assert "[1] sla_policy.md" in rendered
+
+
+def test_the_email_draft_prompt_refuses_to_invent_specifics():
+    """An officer signs this. Invented reference numbers or statutes are worse
+    than a blunt email."""
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("email_draft")
+    assert set(prompt.input_variables) == {"department", "tracking_id", "category",
+                                           "risk_level", "sla_hours", "description", "evidence"}
+    rendered = prompt.format(department="Public Works Department", tracking_id="CIV-1",
+                             category="ROADS", risk_level="high", sla_hours=24,
+                             description="pothole", evidence="[1] sop_roads.md › Ownership")
+    assert "do not invent" in rendered.lower()
+    assert "<report>" in rendered and "<evidence>" in rendered
