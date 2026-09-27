@@ -14,6 +14,41 @@
 
 **Prior phases:** 0, 1a, 1b, 1c, 2a, 2b, 2c — **439 tests green, no network, ~13s**.
 
+## What the first live run already told us (2026-09-27)
+
+Before this plan was started, one complaint was run through the whole pipeline
+against real Gemini and real embeddings — the first time any of v2 touched a live
+model. Two defects came out of it and are already fixed (`e92355b`, `1883bef`):
+the configured model ids had been retired, and the cost chain could not decline
+so it priced an unpriceable job at ₹0. Three observations were **left alone on
+purpose**, because tuning them before measuring them is how a project ends up
+with numbers it cannot explain:
+
+1. **The rate card's applicable line was not retrieved.** The complaint was an
+   unfilled utility trench; `rate_card.md` contains "Excavation and trench
+   reinstatement | CONSTRUCTION | per m³ | ₹900"; three rate-card chunks were
+   retrieved and that row was not among them, so the model correctly declined to
+   price the job. This is a `context_recall` failure and Task 8 measures it. Note
+   before changing anything: rate-card chunks carry no `category` metadata, so
+   `work_order` cannot filter to the category's rows — a structural fix (category
+   per table row at chunk time) is available and should be justified by a number,
+   not by this one anecdote.
+2. **BM25 pulls on incidental words.** For "pothole outside a school gate" the top
+   hit was `sop_education.md › Escalation`, above `sop_roads.md › Ownership` —
+   "school" is doing the work. Hybrid fusion is supposed to absorb this; whether
+   it does is the `context_precision` question.
+3. **Latency is wildly variable**: 42.7s on the first clean run, 263.5s on the
+   second, same complaint and same six nodes. Almost certainly free-tier
+   throttling and the client's own retries stacking with `SHARED_RATE_LIMITER`
+   (see the note on it in `app/ai/llm.py`). Task 5 reports p95, and the report
+   must state the rate-limit setting alongside it or the number means nothing.
+
+Also worth knowing: retrieval scores in every trace are ~0.03. They are RRF
+fusion scores (`1/(rrf_k + rank)`), not similarities, and no metric or report may
+present them as confidence.
+
+---
+
 ## Global Constraints
 
 - Python 3.14, `backend/.venv`. Tests: `cd backend && .venv/bin/python -m pytest -q`. Suite starts at **439 passing, no network**. Every task keeps it green and adds the count it states.
