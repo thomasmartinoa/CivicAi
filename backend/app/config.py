@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     cluster_radius_km: float = 0.5
     cluster_similarity_threshold: float = 0.82
     cluster_min_size: int = 3
+    # Which scheduled jobs run, and when the officer's briefing is written.
+    # background_jobs_enabled is the master switch over all of them.
+    cluster_detection_enabled: bool = True
+    briefing_enabled: bool = True
+    cases_refresh_enabled: bool = True
+    briefing_hour: int = 8
 
     # ── Storage ───────────────────────────────────────────────
     upload_dir: str = "./uploads"
