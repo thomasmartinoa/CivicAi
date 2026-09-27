@@ -192,3 +192,15 @@ class RetrievedChunk(BaseModel):
     @property
     def citation(self) -> str:
         return " › ".join([self.source, *self.headers])
+
+
+class BriefingNarrative(BaseModel):
+    """The officer's morning summary. Not stored in ComplaintState — the
+    briefing is a scheduled job, not a node — so it is not in
+    CHECKPOINT_ALLOWLIST."""
+
+    summary: str = Field(description="Two or three sentences on the day, in plain prose")
+    priorities: list[str] = Field(default_factory=list,
+                                  description="At most three things to act on today, most urgent first")
+    citations: list[str] = Field(default_factory=list,
+                                 description="The evidence items relied on, as 'source › header' strings")

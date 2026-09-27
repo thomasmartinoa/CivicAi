@@ -6,7 +6,7 @@ from app.ai.prompts import LATEST, PROMPT_REGISTRY, get_prompt
 
 def test_every_expected_prompt_is_registered():
     assert set(LATEST) == {"validate", "classify", "investigate", "assess_risk",
-                           "vision", "work_order", "work_order_cluster"}
+                           "vision", "work_order", "work_order_cluster", "briefing"}
 
 
 def test_get_prompt_returns_the_latest_version_by_default():
@@ -139,3 +139,17 @@ def test_the_cluster_cost_prompt_forbids_inventing_the_discount():
     assert "[1] rate_card.md" in rendered
     assert "never invent" in rendered.lower()
     assert "<report>" in rendered and "<evidence>" in rendered
+
+
+def test_the_briefing_prompt_is_told_not_to_recompute_the_numbers():
+    """The counts are queried in Python; a model that re-derives them is the
+    fastest way to a briefing an officer stops trusting."""
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("briefing")
+    assert set(prompt.input_variables) == {"date", "stats_table", "at_risk_list",
+                                           "cluster_list", "evidence"}
+    rendered = prompt.format(date="2026-09-27", stats_table="new: 4", at_risk_list="none",
+                             cluster_list="none", evidence="[1] sla_policy.md › Response windows")
+    assert "do not recompute" in rendered.lower()
+    assert "[1] sla_policy.md" in rendered

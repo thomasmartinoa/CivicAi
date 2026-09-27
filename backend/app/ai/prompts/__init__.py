@@ -7,12 +7,13 @@ through two prompt versions and report which classified better.
 from langchain_core.prompts import ChatPromptTemplate
 
 from app.ai.prompts.templates import (
-    ASSESS_RISK_V1, ASSESS_RISK_V2, CLASSIFY_V1, CLASSIFY_V2, INVESTIGATE_V1, VALIDATE_V1,
+    ASSESS_RISK_V1, ASSESS_RISK_V2, BRIEFING_V1, CLASSIFY_V1, CLASSIFY_V2, INVESTIGATE_V1, VALIDATE_V1,
     VISION_V1, WORK_ORDER_CLUSTER_V1, WORK_ORDER_V1,
 )
 
 PROMPT_REGISTRY: dict[tuple[str, str], ChatPromptTemplate] = {
     ("validate", "v1"): VALIDATE_V1,
+    ("briefing", "v1"): BRIEFING_V1,
     ("classify", "v1"): CLASSIFY_V1,
     ("classify", "v2"): CLASSIFY_V2,
     ("investigate", "v1"): INVESTIGATE_V1,
@@ -26,6 +27,7 @@ PROMPT_REGISTRY: dict[tuple[str, str], ChatPromptTemplate] = {
 # The version each node uses unless told otherwise.
 LATEST: dict[str, str] = {
     "validate": "v1",
+    "briefing": "v1",
     "classify": "v2",
     "investigate": "v1",
     "assess_risk": "v2",
