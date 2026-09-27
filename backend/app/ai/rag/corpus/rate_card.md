@@ -57,6 +57,21 @@ day rate for general-purpose machinery (compressors, generators, small
 excavators) not itemised above is ₹3,500 per day; heavier plant such as a
 hydraulic excavator or a road roller is billed at ₹9,000 per day.
 
+## Grouped work at multiple sites
+
+When one crew fixes several nearby sites in a single mobilisation, material
+quantities are summed at the unit rates above, but labour and equipment are
+not charged in full for every site. The crew mobilises once, so the first
+site is billed at its standalone labour and equipment cost and the second
+and subsequent sites are billed at 70% of theirs. A supervising engineer's
+day rate is charged once per mobilisation regardless of the number of sites.
+
+A grouped estimate must state the number of sites it covers and show the
+mobilisation saving as its own line, so the saving can be audited against
+the contractor's invoice rather than disappearing into a single total. Sites
+more than one kilometre apart are separate mobilisations and this section
+does not apply to them.
+
 ## Notes on use
 
 An estimate combines material line items from the table above with the

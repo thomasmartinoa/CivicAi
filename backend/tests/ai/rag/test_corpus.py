@@ -145,3 +145,15 @@ def test_a_doc_type_filter_reaches_the_rate_card():
 
     assert hits
     assert all(h.chunk.source == "rate_card.md" for h in hits)
+
+
+def test_the_rate_card_states_a_rule_for_grouped_work():
+    """v1 priced a cluster at `base * count * 0.7` in Python. The discount is a
+    municipal rule, so the prompt must be able to cite it — if the section is
+    missing, the model is asked for a rule that does not exist and invents one.
+    """
+    text = next(t for p, t in load_corpus() if p.name == "rate_card.md")
+    assert "## Grouped work at multiple sites" in text
+    section = text.split("## Grouped work at multiple sites", 1)[1].split("\n## ", 1)[0]
+    assert re.search(r"\b\d{1,3}\s?%", section), "the grouped-work rule states no percentage"
+    assert "mobilis" in section.lower(), "the rule must explain what the saving is"

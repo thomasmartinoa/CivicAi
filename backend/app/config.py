@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # The SLA monitor and anything else on a timer. Off in tests, which run
     # the app's lifespan for real and must not leave a scheduler behind.
     background_jobs_enabled: bool = True
+    # Semantic clustering: how close two reports must be in space and in meaning
+    # to be one job, and how many sites make a cluster worth grouping. v1 used a
+    # ~1 km grid and required identical category labels.
+    cluster_radius_km: float = 0.5
+    cluster_similarity_threshold: float = 0.82
+    cluster_min_size: int = 3
 
     # ── Storage ───────────────────────────────────────────────
     upload_dir: str = "./uploads"

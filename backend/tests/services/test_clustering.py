@@ -192,3 +192,215 @@ def test_identical_text_still_clusters_under_the_hashing_fake():
                          _candidate(text, MG_ROAD_200M, id="c")],
                         embedder=FakeEmbedder(), threshold=0.95)
     assert len(clusters) == 1 and clusters[0].size == 3
+
+
+# ── the hourly job ──────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def tenant(db_session):
+    from app.services.seed import seed_database
+
+    return seed_database(db_session)["tenant_id"]
+
+
+def _stored(db_session, tenant_id, text, coords, *, category="ROADS", risk="high",
+            priority=50, status="assigned", tracking=None):
+    from uuid import uuid4
+
+    from app.db.models.complaint import Complaint
+
+    complaint = Complaint(
+        tracking_id=tracking or f"CIV-{uuid4().hex[:8].upper()}", tenant_id=tenant_id,
+        citizen_email="a@b.com", description=text, category=category, risk_level=risk,
+        priority_score=priority, status=status, latitude=coords[0], longitude=coords[1],
+        district="South Bangalore",
+    )
+    db_session.add(complaint)
+    db_session.flush()
+    return complaint
+
+
+def _three_potholes(db_session, tenant_id):
+    text = "huge hole in the mg road surface"
+    made = [_stored(db_session, tenant_id, text, c, priority=p)
+            for c, p in ((MG_ROAD, 90), (MG_ROAD_50M, 60), (MG_ROAD_200M, 40))]
+    db_session.commit()
+    return made
+
+
+def _rate_card():
+    from tests.ai.graph.test_retrieval import FakeRetriever, _hit
+
+    return FakeRetriever([_hit("Second and subsequent sites are billed at 70% of labour.",
+                               "rate_card.md", ["Municipal Rate Card", "Grouped work at multiple sites"])])
+
+
+def _estimate(cost=21000.0, basis="3 sites, mobilisation charged once [1]"):
+    from app.ai.schemas import CostEstimate
+    from tests.ai.graph.conftest import returns
+
+    return returns(CostEstimate(estimated_cost=cost, cost_basis=basis, materials="hot mix"))
+
+
+def _detect(db_session, **over):
+    from app.services.clustering import detect_clusters
+
+    kwargs = dict(session_factory=lambda: db_session, embedder=FakeEmbedder(),
+                  cost_chain=_estimate(), retriever=_rate_card(), threshold=0.95)
+    kwargs.update(over)
+    return detect_clusters(**kwargs)
+
+
+def test_three_nearby_reports_become_one_grouped_work_order(db_session, tenant):
+    from app.db.models.complaint import Complaint
+    from app.db.models.workflow import WorkOrder
+    from app.services.clustering import ClusterTick
+
+    lead = _three_potholes(db_session, tenant)[0]
+    assert _detect(db_session) == ClusterTick(clusters=1, complaints=3)
+
+    db_session.expire_all()
+    order = db_session.query(WorkOrder).filter_by(is_cluster=True).one()
+    assert order.complaint_id == lead.id, "the highest-priority report leads"
+    assert order.cluster_size == 3
+    assert order.estimated_cost == 21000.0
+    assert "70%" in order.cost_basis or "mobilisation" in order.cost_basis
+    assert order.contractor_id is not None, "a cluster still needs a crew"
+    assert db_session.query(Complaint).filter_by(cluster_id=lead.id).count() == 3
+
+
+def test_a_second_tick_clusters_nothing(db_session, tenant):
+    from app.db.models.workflow import WorkOrder
+    from app.services.clustering import ClusterTick
+
+    _three_potholes(db_session, tenant)
+    _detect(db_session)
+    assert _detect(db_session) == ClusterTick()
+    assert db_session.query(WorkOrder).filter_by(is_cluster=True).count() == 1
+
+
+def test_clusters_never_span_tenants(db_session, tenant):
+    """The SLA monitor's tenant-blindness is already on the carry-forward list;
+    this job must not add a second instance of it."""
+    from app.db.models.core import Tenant
+    from app.services.clustering import ClusterTick
+
+    other = Tenant(name="Mysuru City Corporation", config={})
+    db_session.add(other)
+    db_session.flush()
+    text = "huge hole in the mg road surface"
+    _stored(db_session, tenant, text, MG_ROAD)
+    _stored(db_session, tenant, text, MG_ROAD_50M)
+    _stored(db_session, other.id, text, MG_ROAD_200M)
+    db_session.commit()
+
+    assert _detect(db_session, min_size=3) == ClusterTick()
+    assert _detect(db_session, min_size=2) == ClusterTick(clusters=1, complaints=2)
+
+
+def test_the_grouped_window_is_the_most_urgent_members(db_session, tenant):
+    """One critical report among mediums pulls the whole cluster onto the
+    critical window: the crew makes one trip."""
+    from app.constants import DEFAULT_SLA_HOURS, RiskLevel
+    from app.db.models.workflow import WorkOrder
+
+    text = "huge hole in the mg road surface"
+    _stored(db_session, tenant, text, MG_ROAD, risk="medium", priority=40)
+    _stored(db_session, tenant, text, MG_ROAD_50M, risk="critical", priority=90)
+    _stored(db_session, tenant, text, MG_ROAD_200M, risk="medium", priority=30)
+    db_session.commit()
+
+    _detect(db_session)
+    db_session.expire_all()
+    order = db_session.query(WorkOrder).filter_by(is_cluster=True).one()
+    assert order.sla_hours == DEFAULT_SLA_HOURS[RiskLevel.CRITICAL]
+    assert order.sla_deadline is not None
+
+
+def test_a_failed_cost_chain_still_produces_the_cluster(db_session, tenant):
+    """Grounding is a soft dependency here too: the crew still needs the job."""
+    from app.db.models.workflow import WorkOrder
+    from tests.ai.graph.conftest import raises
+
+    _three_potholes(db_session, tenant)
+    assert _detect(db_session, cost_chain=raises(RuntimeError("quota"))).clusters == 1
+    db_session.expire_all()
+    order = db_session.query(WorkOrder).filter_by(is_cluster=True).one()
+    assert order.estimated_cost is None
+    assert "quota" in order.cost_basis
+
+
+def test_resolved_and_rejected_complaints_are_not_clustered(db_session, tenant):
+    from app.services.clustering import ClusterTick
+
+    text = "huge hole in the mg road surface"
+    _stored(db_session, tenant, text, MG_ROAD, status="resolved")
+    _stored(db_session, tenant, text, MG_ROAD_50M, status="rejected")
+    _stored(db_session, tenant, text, MG_ROAD_200M, status="assigned")
+    db_session.commit()
+    assert _detect(db_session, min_size=2) == ClusterTick()
+
+
+def test_complaints_without_coordinates_are_not_clustered(db_session, tenant):
+    """v1 wrote `round(complaint.latitude or 0, 2)`, which put every
+    coordinate-less complaint in one bucket in the Gulf of Guinea."""
+    from app.db.models.complaint import Complaint
+    from app.services.clustering import ClusterTick
+
+    text = "huge hole in the mg road surface"
+    for _ in range(3):
+        complaint = _stored(db_session, tenant, text, (0.0, 0.0))
+        complaint.latitude = None
+        complaint.longitude = None
+    db_session.commit()
+    assert _detect(db_session) == ClusterTick()
+    assert db_session.query(Complaint).filter(Complaint.cluster_id.isnot(None)).count() == 0
+
+
+def test_a_member_keeps_a_work_order_it_already_had(db_session, tenant):
+    """Work already dispatched is not deleted; the cluster is recorded and the
+    officer reconciles."""
+    from app.db.models.workflow import WorkOrder
+
+    lead, member, _ = _three_potholes(db_session, tenant)
+    existing = WorkOrder(complaint_id=member.id, tenant_id=tenant, status="assigned", sla_hours=24)
+    db_session.add(existing)
+    db_session.commit()
+
+    _detect(db_session)
+    db_session.expire_all()
+    assert db_session.query(WorkOrder).filter_by(complaint_id=member.id).one().is_cluster is False
+    assert db_session.query(WorkOrder).filter_by(is_cluster=True).one().complaint_id == lead.id
+
+
+def test_a_lead_that_already_has_a_work_order_is_not_given_a_second(db_session, tenant):
+    """work_orders.complaint_id is unique: inserting blindly would raise."""
+    from app.db.models.workflow import WorkOrder
+
+    lead = _three_potholes(db_session, tenant)[0]
+    db_session.add(WorkOrder(complaint_id=lead.id, tenant_id=tenant, status="assigned", sla_hours=24))
+    db_session.commit()
+
+    tick = _detect(db_session)
+    db_session.expire_all()
+    orders = db_session.query(WorkOrder).filter_by(complaint_id=lead.id).all()
+    assert len(orders) == 1, "the existing order is updated in place, not duplicated"
+    assert orders[0].is_cluster is True and orders[0].cluster_size == 3
+    assert tick.clusters == 1
+
+
+def test_the_cluster_contractor_is_scored_against_the_leads_district(db_session, tenant):
+    """score_contractor gives a zone bonus, so passing None would quietly pick
+    a crew from the wrong side of the city."""
+    from app.db.models.core import Contractor
+    from app.db.models.workflow import WorkOrder
+
+    _three_potholes(db_session, tenant)  # district "South Bangalore"
+    _detect(db_session)
+    db_session.expire_all()
+    order = db_session.query(WorkOrder).filter_by(is_cluster=True).one()
+    contractor = db_session.get(Contractor, order.contractor_id)
+    assert contractor.zone == "South Bangalore", (
+        "the ROADS contractor in the lead's own zone should win the zone bonus"
+    )

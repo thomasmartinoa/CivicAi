@@ -6,7 +6,7 @@ from app.ai.prompts import LATEST, PROMPT_REGISTRY, get_prompt
 
 def test_every_expected_prompt_is_registered():
     assert set(LATEST) == {"validate", "classify", "investigate", "assess_risk",
-                           "vision", "work_order"}
+                           "vision", "work_order", "work_order_cluster"}
 
 
 def test_get_prompt_returns_the_latest_version_by_default():
@@ -123,3 +123,19 @@ def test_the_investigate_prompt_sees_the_first_pass_and_the_evidence():
                              previous_confidence=0.4, evidence="[1] category_taxonomy.md\nCONSTRUCTION owns excavation")
     assert "[1] category_taxonomy.md" in rendered
     assert "<evidence>" in rendered and "<report>" in rendered
+
+
+def test_the_cluster_cost_prompt_forbids_inventing_the_discount():
+    """The bulk rule lives in rate_card.md. A prompt that let the model supply
+    it would be v1's hardcoded 0.7 with extra steps."""
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("work_order_cluster")
+    assert set(prompt.input_variables) == {"category", "risk_level", "site_count",
+                                           "descriptions", "evidence"}
+    rendered = prompt.format(category="ROADS", risk_level="high", site_count=3,
+                             descriptions="- a\n- b\n- c",
+                             evidence="[1] rate_card.md › Grouped work at multiple sites\n70%")
+    assert "[1] rate_card.md" in rendered
+    assert "never invent" in rendered.lower()
+    assert "<report>" in rendered and "<evidence>" in rendered
