@@ -29,8 +29,13 @@ class Settings(BaseSettings):
 
     # ── LLM providers ─────────────────────────────────────────
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash-lite"
-    gemini_model_strong: str = "gemini-2.5-flash"
+    # Checked against the live model list on 2026-09-27: the 2.5 names these
+    # defaults used until then return 404 NOT_FOUND ("no longer available to new
+    # users"), and the API's own deprecation notice names 3.5 as the migration
+    # target. Model ids expire; the smoke test in Phase 3's plan is what catches
+    # it, since every unit test uses a fake model.
+    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_model_strong: str = "gemini-3.5-flash"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
     ollama_enabled: bool = False
