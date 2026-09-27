@@ -46,6 +46,14 @@ class Complaint(Base):
     district: Mapped[str | None] = mapped_column(String(100), index=True)
     state: Mapped[str | None] = mapped_column(String(100))
 
+    # ── clustering ────────────────────────────────────────────
+    # The lead complaint's id, written on every member of a cluster including
+    # the lead itself; NULL means unclustered, which is what the hourly job
+    # selects on. Membership lives here rather than on the work order because
+    # work_orders.complaint_id is unique -- one grouped order cannot reference
+    # ten complaints -- and v1's alternative was `notes LIKE '%[CLUSTER]%'`.
+    cluster_id: Mapped[str | None] = mapped_column(String(36), index=True)
+
     # ── citizen feedback ──────────────────────────────────────
     satisfaction_rating: Mapped[int | None] = mapped_column(Integer)
     satisfaction_comment: Mapped[str | None] = mapped_column(Text)

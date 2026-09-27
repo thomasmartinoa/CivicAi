@@ -151,3 +151,35 @@ def test_deleting_a_complaint_cascades_to_its_children(db_session):
 
     assert db_session.query(ComplaintMedia).count() == 0
     assert db_session.query(WorkOrder).count() == 0
+
+
+def _clusterable(db_session, tracking_id, description):
+    complaint = Complaint(tracking_id=tracking_id, citizen_email="a@b.com", description=description,
+                          category="ROADS", latitude=12.9716, longitude=77.5946)
+    db_session.add(complaint)
+    db_session.flush()
+    return complaint
+
+
+def test_cluster_members_point_at_their_lead(db_session):
+    """Membership lives on the complaint, not on the work order:
+    work_orders.complaint_id is unique, so one grouped order cannot reference
+    every complaint in its cluster."""
+    lead = _clusterable(db_session, "CIV-LEAD0001", "huge pothole on MG Road")
+    member = _clusterable(db_session, "CIV-MEMB0001", "MG Road has caved in")
+    lead.cluster_id = lead.id
+    member.cluster_id = lead.id
+    db_session.add(WorkOrder(complaint_id=lead.id, is_cluster=True, cluster_size=2))
+    db_session.commit()
+
+    members = db_session.query(Complaint).filter_by(cluster_id=lead.id).all()
+    assert {c.id for c in members} == {lead.id, member.id}
+    order = db_session.query(WorkOrder).filter_by(is_cluster=True).one()
+    assert order.complaint_id == lead.id
+    assert order.cluster_size == 2
+
+
+def test_an_unclustered_complaint_has_no_cluster_id(db_session):
+    """The clustering job selects on `cluster_id IS NULL`, so the default
+    must be NULL and not the complaint's own id."""
+    assert _clusterable(db_session, "CIV-SOLO0001", "single pothole").cluster_id is None
