@@ -562,3 +562,94 @@ def test_one_failing_job_does_not_stop_the_others(caplog):
 **Deliberately not in this phase:** the officer HTTP surface (draft/approve/send endpoints, JWT auth) — Phase 4/5; `WorkOrder.actual_cost` has no writer until a completion path exists, so case records still fall back to the estimate (Phase 2b carry-forward, closed there); `retrieved_chunks` still stores no `DocumentChunk.id` (Phase 2a carry-forward, still open, and cheapest to do alongside the Phase 3 eval schema).
 
 **Next:** Phase 3 — the golden set, metrics, judges, Ragas, and the three-way baseline comparison over the v1/v2 prompt versions this phase and Phase 2b kept registered. Read Task 1's cache note first: an eval sweep must build its own caches, never `cache_for`.
+
+---
+
+## Carried forward from Phase 2c (recorded 2026-09-27)
+
+Phase 2c landed in eight commits (22919ad..521af37), 439 tests, no network in the
+suite, `git status --porcelain` empty. The plan projected 421; the extra came from
+edge cases the tasks turned out to need (a nonsense SLA config, a lead that already
+has a work order, contractor zone scoring, per-job switches).
+
+**Review status, again uneven.** Every task was implemented against its own tests
+in one sitting, with no independent review pass. The items below come from reading
+the finished code. The three Phase 2b seams this phase promised to close are
+closed; two Phase 2b items remain open and are restated at the end.
+
+**The functional gap worth fixing first**
+- **A cluster never grows.** `open_candidates` filters on `cluster_id IS NULL`, so
+  once three reports are grouped, the fourth report of the same pothole is not a
+  candidate for that cluster — it waits for two *more* reports to form a second
+  cluster of its own, at the same place, with a second work order and a second
+  crew. v1 re-bucketed everything every hour and so did not have this problem (it
+  had worse ones). The fix is a join path: consider an existing cluster's lead as
+  a possible match for an unclustered candidate, and on a match set `cluster_id`,
+  bump `cluster_size`, and re-price. It needs a decision about whether re-pricing
+  a dispatched work order is allowed, which is why it is not a silent addition.
+
+**Clustering**
+- Unclustered complaints are re-embedded every hour, per tenant, forever. At a few
+  hundred open complaints that is one cheap batch; at a few thousand it is a real
+  bill for no new information. Store the embedding (or cache it by complaint id) —
+  Phase 3's eval sweeps want the same thing.
+- Pair comparison is O(n²) per tenant. Fine at hundreds; if it stops being fine,
+  the fix is to bucket by a coarse geohash first and compare within buckets, which
+  is v1's grid used as a *pre-filter* rather than as the answer.
+- `cluster_work_order()` is written, tested and **called by nothing**. It is the
+  helper any "show me this complaint's work order" path needs, and that path is
+  Phase 5. Either wire it when the officer screens land or delete it.
+- A grouped work order does not touch its members' `status`, and no member's
+  citizen is told their report was merged into one job. The `Escalation`-style
+  audit row does not exist for clustering either: the only record is
+  `cluster_id` plus the work order's `notes` string.
+- `_worst_risk` re-queries the member complaints that `open_candidates` already
+  read, because `Candidate` carries `district` but not `risk_level`. Thread it the
+  way `district` was.
+- Contractor selection is `max(score_contractor(...))` over every contractor in
+  the tenant, so specialisation adds weight but does not gate — the same shape as
+  the SLA monitor's reassignment, noted on Phase 2b's list. One scoring fix covers
+  both.
+- `cluster_similarity_threshold = 0.82` has never been measured against real
+  embeddings. The tests use a bag-of-words fake specifically so the threshold is
+  not vacuous, and say so; what the right number is on real prose is a Phase 3
+  eval question.
+
+**Briefing**
+- **`resolved_today` counts `Complaint.updated_at`**, which carries
+  `onupdate=utcnow`. Any edit to a resolved complaint moves it into a later day's
+  count, and a complaint resolved yesterday but touched today is counted today.
+  There is no `resolved_at` column; adding one is the honest fix and it also gives
+  case records a real resolution timestamp.
+- **The day is UTC midnight to UTC midnight.** For a Bengaluru municipality,
+  `BRIEFING_HOUR=8` reports 05:30 IST yesterday to 05:30 IST today. `Tenant` has
+  no timezone, so this cannot be fixed without modelling one.
+- `BriefingNarrative.citations` is **dropped**: only `summary` and `priorities` are
+  rendered into `narrative`. The model is asked to cite `[n]` and the citation
+  strings are then thrown away, so an officer sees `[1]` with no key. Either
+  render them or stop asking for them.
+- `sla_at_risk` is "at risk *now*", not "at risk during that day", so a briefing
+  generated for a past date reports today's exposure. Right for the 08:00 job,
+  wrong for a backfill.
+- `generate_briefing` commits once after looping every tenant, so a database error
+  on the fifth tenant discards the four rows already written. Per-tenant commits
+  would match `detect_clusters`.
+
+**Email draft**
+- The approved-draft early return rebuilds an `EmailDraft` with `subject` as the
+  first line and `body` as the *whole* stored text, so the returned body repeats
+  the subject. Callers that render `subject` and `body` separately will show it
+  twice. The underlying cause is that the draft is stored as one `Text` column
+  with the subject concatenated; a `email_subject` column, or storing JSON, fixes
+  both.
+- Nothing calls this service either — by design, stated in the plan: `app/api/` is
+  citizen-only and no officer authentication exists. Draft/approve/send is Phase
+  4/5 work.
+
+**Still open from Phase 2b**
+- Nothing writes `WorkOrder.actual_cost`, so case records still teach the
+  estimate rather than the outcome. A completion path is the prerequisite.
+- `retrieved_chunks` stores the derived `chunk_id` but not `DocumentChunk.id` or
+  the header path, so there is no durable join from a stored citation back to the
+  indexed row. Cheapest to do alongside Phase 3's eval schema work, which touches
+  the same tables.
