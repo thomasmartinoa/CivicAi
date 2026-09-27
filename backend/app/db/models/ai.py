@@ -63,9 +63,21 @@ class RetrievedChunk(Base):
     run_id: Mapped[str] = mapped_column(String(36), ForeignKey("agent_runs.id"), nullable=False, index=True)
     node: Mapped[str] = mapped_column(String(60), nullable=False)
     source: Mapped[str] = mapped_column(String(500), nullable=False)
+    # The content-derived id from the chunker: stable across edits elsewhere in
+    # the file, but a chunk whose own text changes gets a new one by design.
     chunk_id: Mapped[str | None] = mapped_column(String(64))
+    # The durable join key. Nullable because rows written before this column
+    # existed have none, and because re-ingest can retire a chunk id — an old
+    # citation stays readable from source/headers/snippet even when the join
+    # goes null. Ragas context_precision needs this join.
+    document_chunk_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("document_chunks.id"), index=True
+    )
     score: Mapped[float | None] = mapped_column(Float)
     snippet: Mapped[str | None] = mapped_column(Text)
+    # The markdown header path, so a stored citation reads
+    # "sop_roads.md › Roads SOP › Ownership" without re-querying the index.
+    headers: Mapped[list | None] = mapped_column(JSON, default=list)
 
     run: Mapped["AgentRun"] = relationship(back_populates="chunks")
 

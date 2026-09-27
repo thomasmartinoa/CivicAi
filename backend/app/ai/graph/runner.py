@@ -233,6 +233,23 @@ def _status_for(state: ComplaintState) -> str:
     return "processed"
 
 
+def _document_chunk_ids(session, chunk_ids: list[str | None]) -> dict[str, str]:
+    """Map content-derived chunk ids to DocumentChunk primary keys.
+
+    One query for the whole batch rather than one per citation: a run with four
+    grounded nodes cites a dozen chunks. The id lives inside metadata_json, so
+    this reads it through SQLAlchemy's JSON accessor, which compiles to
+    json_extract on SQLite and ->> on PostgreSQL.
+    """
+    from app.db.models.ai import DocumentChunk
+
+    wanted = [c for c in chunk_ids if c]
+    if not wanted:
+        return {}
+    key = DocumentChunk.metadata_json["chunk_id"].as_string()
+    rows = session.query(DocumentChunk.id, key).filter(key.in_(wanted)).all()
+    return {chunk_id: row_id for row_id, chunk_id in rows}
+
 def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
     """Write complaint state changes and audit trail to the database.
 
@@ -337,12 +354,18 @@ def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
         .filter(AgentRun.complaint_id == state["complaint_id"])
         .count()
     )
-    for chunk in state["evidence"][evidence_recorded:]:
+    new_evidence = state["evidence"][evidence_recorded:]
+    chunk_row_ids = _document_chunk_ids(session, [c.chunk_id for c in new_evidence])
+    for chunk in new_evidence:
         session.add(RetrievedChunkRow(
             run_id=run.id,
             node=chunk.node,
             source=chunk.source,
             chunk_id=chunk.chunk_id,
+            # None when the chunk has since been re-indexed under a new id. The
+            # citation stays readable from source, headers and snippet.
+            document_chunk_id=chunk_row_ids.get(chunk.chunk_id),
+            headers=list(chunk.headers),
             score=chunk.score,
             snippet=chunk.snippet[:2000],
         ))

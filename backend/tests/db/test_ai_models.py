@@ -74,3 +74,56 @@ def test_eval_results_attach_to_a_run(db_session):
     db_session.commit()
 
     assert db_session.query(EvalResult).one().metric == "category_macro_f1"
+
+
+def test_a_citation_joins_back_to_the_indexed_chunk(db_session):
+    """Open since Phase 2a: retrieved_chunks stored only the derived chunk_id, so
+    nothing could get from a stored citation to the row that was indexed. Ragas
+    context_precision needs exactly that join."""
+    from app.db.models.ai import Document, DocumentChunk, RetrievedChunk
+
+    document = Document(collection="policy", source_path="sop_roads.md")
+    db_session.add(document)
+    db_session.flush()
+    chunk = DocumentChunk(document_id=document.id, seq=0, text="Public Works owns road surfaces.",
+                          metadata_json={"chunk_id": "sop_roads.md::Ownership::abc123",
+                                         "headers": ["Roads SOP", "Ownership"]})
+    db_session.add(chunk)
+    db_session.flush()
+
+    run = AgentRun(thread_id="thread-citation", status="completed")
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(RetrievedChunk(
+        run_id=run.id, node="route", source="sop_roads.md",
+        chunk_id="sop_roads.md::Ownership::abc123", document_chunk_id=chunk.id,
+        headers=["Roads SOP", "Ownership"], score=0.03, snippet="Public Works owns road surfaces.",
+    ))
+    db_session.commit()
+
+    stored = db_session.query(RetrievedChunk).one()
+    assert stored.document_chunk_id == chunk.id
+    assert db_session.get(DocumentChunk, stored.document_chunk_id).text.startswith("Public Works")
+    assert stored.headers == ["Roads SOP", "Ownership"]
+
+
+def test_a_citation_survives_its_chunk_being_retired(db_session):
+    """Re-ingest changes a chunk id when the text changes. An old run must stay
+    readable — source, headers and snippet are enough to show a human what was
+    cited — so only the join goes null."""
+    from app.db.models.ai import RetrievedChunk
+
+    run = AgentRun(thread_id="thread-retired", status="completed")
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(RetrievedChunk(
+        run_id=run.id, node="work_order", source="rate_card.md",
+        chunk_id="rate_card.md::Unit rates::gone", document_chunk_id=None,
+        headers=["Municipal Rate Card", "Unit rates by item"], score=0.03, snippet="Rs 450 per m2",
+    ))
+    db_session.commit()
+
+    stored = db_session.query(RetrievedChunk).one()
+    assert stored.document_chunk_id is None
+    assert stored.headers == ["Municipal Rate Card", "Unit rates by item"]
+    assert "450" in stored.snippet
