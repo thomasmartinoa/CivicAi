@@ -34,6 +34,7 @@ def build_deps(session_factory: Callable, complaint) -> GraphDeps:
     )
     from app.services.geocoding import reverse_geocode
     from app.services.notify import notify_citizen
+    from app.services.tenancy import tenant_sla_lookup
 
     complaint_email = complaint.citizen_email
     def notify(**kwargs):
@@ -58,6 +59,7 @@ def build_deps(session_factory: Callable, complaint) -> GraphDeps:
         session_factory=session_factory,
         geocode=reverse_geocode,
         notify=notify,
+        sla_hours=tenant_sla_lookup(session_factory),
     )
 
 

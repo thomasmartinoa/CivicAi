@@ -1,6 +1,6 @@
-from app.ai.graph.nodes.work_order import SLA_HOURS, work_order_node
+from app.ai.graph.nodes.work_order import work_order_node
 from app.ai.schemas import ClassificationResult, CostEstimate, RiskAssessment
-from app.constants import Category, RiskLevel
+from app.constants import DEFAULT_SLA_HOURS, Category, RiskLevel
 from tests.ai.graph.conftest import raises, returns
 from tests.ai.graph.test_retrieval import FakeRetriever, _hit
 
@@ -11,13 +11,13 @@ def _state(base_state, level, score):
             "risk": RiskAssessment(priority_score=score, risk_level=level)}
 
 
-def test_every_risk_level_has_an_sla():
-    assert set(SLA_HOURS) == set(RiskLevel)
+def test_every_risk_level_has_a_default_sla():
+    assert set(DEFAULT_SLA_HOURS) == set(RiskLevel)
 
 
 def test_sla_windows_shorten_as_risk_rises():
-    assert (SLA_HOURS[RiskLevel.CRITICAL] < SLA_HOURS[RiskLevel.HIGH]
-            < SLA_HOURS[RiskLevel.MEDIUM] < SLA_HOURS[RiskLevel.LOW])
+    assert (DEFAULT_SLA_HOURS[RiskLevel.CRITICAL] < DEFAULT_SLA_HOURS[RiskLevel.HIGH]
+            < DEFAULT_SLA_HOURS[RiskLevel.MEDIUM] < DEFAULT_SLA_HOURS[RiskLevel.LOW])
 
 
 def test_the_node_computes_the_window_not_the_model(make_config, base_state):
@@ -28,13 +28,13 @@ def test_the_node_computes_the_window_not_the_model(make_config, base_state):
     assert "sla_deadline" not in WorkOrderDraft.model_fields
 
     update = work_order_node(_state(base_state, RiskLevel.CRITICAL, 90), make_config())
-    assert update["work_order"].sla_hours == SLA_HOURS[RiskLevel.CRITICAL]
+    assert update["work_order"].sla_hours == DEFAULT_SLA_HOURS[RiskLevel.CRITICAL]
 
 
 def test_the_window_tracks_the_risk_band(make_config, base_state):
     for level, score in ((RiskLevel.HIGH, 60), (RiskLevel.LOW, 10)):
         update = work_order_node(_state(base_state, level, score), make_config())
-        assert update["work_order"].sla_hours == SLA_HOURS[level]
+        assert update["work_order"].sla_hours == DEFAULT_SLA_HOURS[level]
 
 
 def test_the_computed_deadline_is_timezone_aware(make_config, base_state):
@@ -44,7 +44,7 @@ def test_the_computed_deadline_is_timezone_aware(make_config, base_state):
     datetime shows a "+00:00" offset; a naive datetime.utcnow() would not."""
     update = work_order_node(_state(base_state, RiskLevel.HIGH, 60), make_config())
     summary = update["decision_log"][-1].summary
-    assert update["work_order"].sla_hours == SLA_HOURS[RiskLevel.HIGH]
+    assert update["work_order"].sla_hours == DEFAULT_SLA_HOURS[RiskLevel.HIGH]
     assert "+00:00" in summary
 
 
@@ -88,7 +88,7 @@ def test_a_failed_estimate_still_produces_the_sla_window(make_config, base_state
     update = work_order_node(_state(base_state, RiskLevel.CRITICAL, 90),
                              make_config(work_order_chain=raises(RuntimeError("quota")), policy_retriever=_rate_card()))
     draft = update["work_order"]
-    assert draft.sla_hours == SLA_HOURS[RiskLevel.CRITICAL]
+    assert draft.sla_hours == DEFAULT_SLA_HOURS[RiskLevel.CRITICAL]
     assert draft.estimated_cost is None
     assert draft.cost_basis.startswith("estimate unavailable: ")
     assert update["errors"] == ["work_order: quota"]
@@ -97,7 +97,7 @@ def test_a_failed_estimate_still_produces_the_sla_window(make_config, base_state
 def test_no_chain_configured_is_reported_not_raised(make_config, base_state):
     update = work_order_node(_state(base_state, RiskLevel.LOW, 10), make_config())
     assert update["work_order"].estimated_cost is None
-    assert update["work_order"].sla_hours == SLA_HOURS[RiskLevel.LOW]
+    assert update["work_order"].sla_hours == DEFAULT_SLA_HOURS[RiskLevel.LOW]
     assert any("work_order_chain" in e for e in update["errors"])
 
 
@@ -113,3 +113,32 @@ def test_retrieval_filters_target_the_rate_card_then_the_sop(make_config, base_s
                                 policy_retriever=retriever))
     assert retriever.calls[0]["filters"] == {"doc_type": "rate_card"}
     assert retriever.calls[1]["filters"] == {"doc_type": "sop", "category": "ROADS"}
+
+
+def test_the_window_comes_from_the_injected_tenant_lookup(make_config, base_state):
+    """The node asks for the window; it does not own a table of them."""
+    asked = []
+
+    def lookup(tenant_id, risk_level):
+        asked.append((tenant_id, risk_level))
+        return 12
+
+    state = {**_state(base_state, RiskLevel.CRITICAL, 90), "tenant_id": "t-1"}
+    update = work_order_node(state, make_config(work_order_chain=raises(RuntimeError("no model")),
+                                                sla_hours=lookup))
+    assert update["work_order"].sla_hours == 12
+    assert asked == [("t-1", RiskLevel.CRITICAL)]
+
+
+def test_a_failing_tenant_lookup_still_produces_a_window(make_config, base_state):
+    """The deadline is the one thing that must never wait on anything: a broken
+    lookup falls back to the defaults and records a soft error."""
+    state = {**_state(base_state, RiskLevel.HIGH, 60), "tenant_id": "t-1"}
+
+    def boom(tenant_id, risk_level):
+        raise RuntimeError("database gone")
+
+    update = work_order_node(state, make_config(work_order_chain=raises(RuntimeError("no model")),
+                                                sla_hours=boom))
+    assert update["work_order"].sla_hours == DEFAULT_SLA_HOURS[RiskLevel.HIGH]
+    assert any("database gone" in e for e in update["errors"])

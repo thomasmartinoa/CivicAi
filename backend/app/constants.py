@@ -37,6 +37,19 @@ class JurisdictionLevel(StrEnum):
     CITY = "city"
 
 
+# The fallback response window per risk band, in hours. NOT the policy: a
+# tenant's own `config["sla_hours"]` is, and `sla_policy.md` is what a work
+# order cites. These values exist so a tenant that has configured nothing still
+# gets a deadline, and `tests/ai/rag/test_corpus.py` asserts the policy document
+# states the same four windows.
+DEFAULT_SLA_HOURS: dict[RiskLevel, int] = {
+    RiskLevel.CRITICAL: 4,
+    RiskLevel.HIGH: 24,
+    RiskLevel.MEDIUM: 72,
+    RiskLevel.LOW: 168,
+}
+
+
 # Every Category MUST appear here, and every department named here MUST be
 # created by app/services/seed.py. Both invariants are tested.
 CATEGORY_DEPARTMENT: dict[Category, str] = {

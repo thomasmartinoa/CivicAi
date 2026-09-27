@@ -47,6 +47,10 @@ class GraphDeps:
     rather than reuse the instances it passed in."""
     geocode: Callable | None = None
     notify: Callable | None = None
+    sla_hours: Callable | None = None
+    """(tenant_id, RiskLevel) -> hours. The tenant's response window, so the
+    work_order node reads no database. Absent, the node uses
+    app.constants.DEFAULT_SLA_HOURS."""
 
     def require(self, name: str):
         """Fetch a dependency or explain precisely what is missing."""

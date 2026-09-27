@@ -1,11 +1,10 @@
 import re
 
-from app.ai.graph.nodes.work_order import SLA_HOURS
 from app.ai.rag.chunking import CORPUS_DIR, chunk_markdown, load_corpus
 from app.ai.rag.embeddings import FakeEmbedder
 from app.ai.rag.retrievers import BM25Retriever, DenseRetriever, HybridRetriever
 from app.ai.rag.store import FaissStore
-from app.constants import CATEGORY_DEPARTMENT, Category
+from app.constants import CATEGORY_DEPARTMENT, DEFAULT_SLA_HOURS, Category
 from app.db.models.core import Department
 
 
@@ -53,7 +52,7 @@ def test_every_sop_names_the_seeded_department_verbatim():
             )
 
 
-def test_response_norms_agree_with_sla_hours():
+def test_response_norms_agree_with_the_default_sla_hours():
     """The corpus and the code must not disagree about the SLA.
 
     Checking the level name and the hour count occur *anywhere* in the
@@ -62,7 +61,7 @@ def test_response_norms_agree_with_sla_hours():
     them in the same sentence catches that.
     """
     text = next(t for p, t in load_corpus() if p.name == "sla_policy.md")
-    for level, hours in SLA_HOURS.items():
+    for level, hours in DEFAULT_SLA_HOURS.items():
         assert re.search(rf"\b{level.value}\b[^.\n]*\b{hours}\s*hours?\b", text, re.I), (
             f"sla_policy.md does not state the {hours}h window for {level.value} "
             "in the same sentence"
