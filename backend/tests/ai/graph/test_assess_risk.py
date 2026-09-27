@@ -8,7 +8,9 @@ from tests.ai.graph.test_retrieval import FakeRetriever, _hit
 
 
 def _state(base_state):
-    return {**base_state,
+    # tenant_id is always set on a real run -- route_node fails closed without
+    # one -- and precedent retrieval is now scoped by it.
+    return {**base_state, "tenant_id": "t-1",
             "classification": ClassificationResult(category=Category.ROADS, confidence=0.9)}
 
 
@@ -41,7 +43,8 @@ def _policy():
 
 
 def _cases():
-    return FakeRetriever([_hit("ROADS complaint in East: pothole near school. Resolved in 3 hours.", "case:abc", [], category="ROADS")])
+    return FakeRetriever([_hit("ROADS complaint in East: pothole near school. Resolved in 3 hours.",
+                               "case:abc", [], category="ROADS", tenant_id="t-1")])
 
 
 def test_the_chain_sees_policy_and_precedent_as_numbered_evidence(make_config, base_state):
@@ -57,12 +60,14 @@ def test_the_chain_sees_policy_and_precedent_as_numbered_evidence(make_config, b
     assert all(c.node == "assess_risk" for c in update["evidence"])
 
 
-def test_precedent_is_filtered_to_the_category(make_config, base_state):
+def test_precedent_is_filtered_to_the_category_and_the_tenant(make_config, base_state):
+    """Case records are tenant data. Without the tenant filter this
+    municipality's risk score is grounded in another's outcomes."""
     cases = _cases()
     config = make_config(risk_chain=returns(RiskAssessment(priority_score=30, risk_level=RiskLevel.MEDIUM)),
                          policy_retriever=_policy(), cases_retriever=cases)
     assess_risk_node(_state(base_state), config)
-    assert cases.calls[0]["filters"] == {"category": "ROADS"}
+    assert cases.calls[0]["filters"] == {"category": "ROADS", "tenant_id": "t-1"}
 
 
 def test_no_cases_index_is_not_an_error(make_config, base_state):
@@ -80,3 +85,15 @@ def test_a_missing_policy_index_is_a_soft_error(make_config, base_state):
     update = assess_risk_node(_state(base_state), config)
     assert update["risk"].priority_score == 30
     assert update["errors"] == ["assess_risk: retrieval unavailable: no retriever configured"]
+
+
+def test_a_tenantless_complaint_retrieves_no_precedent(make_config, base_state):
+    """Fail closed, as route_node does: an unscoped query spans every tenant."""
+    cases = FakeRetriever([_hit("ROADS in East: resolved in 5 hours.", "case:1", tenant_id="t-1")])
+    state = {**_state(base_state), "tenant_id": None}
+    config = make_config(risk_chain=returns(RiskAssessment(priority_score=60, risk_level=RiskLevel.HIGH)),
+                         policy_retriever=_policy(), cases_retriever=cases)
+    update = assess_risk_node(state, config)
+    assert cases.calls == []
+    assert update["risk"] is not None, "no precedent must not stop the assessment"
+    assert not any("tenant" in e for e in update["errors"]), "a missing tenant is not a retrieval error"

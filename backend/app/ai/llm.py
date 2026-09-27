@@ -173,26 +173,34 @@ def build_structured(
     return with_semantic_cache(chain, cache)
 
 
-# One process-wide cache per chain, built on first use. Keyed by prompt name,
-# never shared between chains: a classification must not be served as a risk
-# assessment.
-_CACHES: dict[str, "SemanticCache"] = {}
+# One process-wide cache per (prompt name, version), built on first use. Never
+# shared between chains: a classification must not be served as a risk
+# assessment, nor one prompt version's answer for another's.
+_CACHES: dict[tuple[str, str], "SemanticCache"] = {}
 
 
-def cache_for(prompt_name: str) -> "SemanticCache | None":
-    """The cache for one chain, or None when caching is off or no embedder is
-    configured. Never raises: a cache is an optimisation, and an unconfigured
-    embedder must not take down every chain in the process."""
+def cache_for(prompt_name: str, version: str | None = None) -> "SemanticCache | None":
+    """The cache for one prompt version, or None when caching is off or no
+    embedder is configured. Never raises: a cache is an optimisation, and an
+    unconfigured embedder must not take down every chain in the process.
+
+    Keyed on the *resolved* version, not just the name. An eval sweep that runs
+    classify v1 against v2 in one process would otherwise share one cache and
+    serve one version's answer for the other, silently flattening the result.
+    """
     if not settings.semantic_cache_enabled:
         return None
-    if prompt_name not in _CACHES:
+    from app.ai.prompts import LATEST
+
+    key = (prompt_name, LATEST[prompt_name] if version is None else version)
+    if key not in _CACHES:
         from app.ai.cache import SemanticCache
         from app.ai.rag import embeddings
 
         try:
-            _CACHES[prompt_name] = SemanticCache(
+            _CACHES[key] = SemanticCache(
                 embeddings.build_embedder(), threshold=settings.semantic_cache_threshold
             )
         except embeddings.NoEmbedderConfigured:
             return None
-    return _CACHES[prompt_name]
+    return _CACHES[key]

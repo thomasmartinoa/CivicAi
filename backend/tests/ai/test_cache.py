@@ -91,3 +91,17 @@ def test_no_cache_when_no_embedder_is_configured(monkeypatch):
         raise embeddings.NoEmbedderConfigured("no key")
     monkeypatch.setattr(embeddings, "build_embedder", no_embedder)
     assert llm.cache_for("validate") is None
+
+
+def test_two_prompt_versions_do_not_share_a_cache(monkeypatch):
+    """A Phase 3 sweep A/Bs classify v1 against v2 in one process. Sharing one
+    cache would serve v2's answer to v1's prompt and flatten the eval."""
+    from app.ai import llm
+    from app.ai.rag import embeddings
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "semantic_cache_enabled", True)
+    monkeypatch.setattr(llm, "_CACHES", {})
+    monkeypatch.setattr(embeddings, "build_embedder", lambda: FakeEmbedder())
+    assert llm.cache_for("classify", "v1") is not llm.cache_for("classify", "v2")
+    assert llm.cache_for("classify") is llm.cache_for("classify", "v2"), "the default resolves through LATEST"

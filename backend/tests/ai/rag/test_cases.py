@@ -41,10 +41,11 @@ def test_a_case_record_states_the_outcome_in_plain_text(db_session):
     assert "SLA 24h" in text
 
 
-def test_case_metadata_is_filterable_by_category_and_district(db_session):
+def test_case_metadata_is_filterable_by_tenant_category_and_district(db_session):
     complaint, _ = _resolved(db_session, description="x")
     assert case_record_metadata(complaint) == {
-        "collection": CASES_COLLECTION, "doc_type": "case", "category": "ROADS", "district": "East", "risk_level": "high",
+        "collection": CASES_COLLECTION, "doc_type": "case", "tenant_id": complaint.tenant_id,
+        "category": "ROADS", "district": "East", "risk_level": "high",
     }
 
 
@@ -104,3 +105,29 @@ def test_cases_and_policy_indexes_live_in_separate_directories(db_session, tmp_p
     ingest_cases(embedder=FakeEmbedder(), index_dir=collection_index_dir(base, CASES_COLLECTION), session_factory=lambda: db_session)
     policy = load_policy_retriever(embedder=FakeEmbedder(), index_dir=collection_index_dir(base, COLLECTION))
     assert len(policy.search("roads", k=100, fetch_k=200)) > 1, "the cases ingest must not have wiped the policy index"
+
+
+def test_precedent_does_not_cross_tenants(db_session, tmp_path):
+    """One index holds every tenant's cases, so the filter is the only thing
+    keeping them apart."""
+    from app.db.models.core import Tenant
+
+    complaint, _ = _resolved(db_session, description="Deep pothole near the school gate")
+    other = Tenant(name="Mysuru City Corporation", config={})
+    db_session.add(other)
+    db_session.flush()
+    stray = Complaint(tracking_id="CIV-OTHER001", tenant_id=other.id, citizen_email="a@b.com",
+                      description="Deep pothole near the school gate", category="ROADS",
+                      district="East", risk_level="high", status="resolved")
+    db_session.add(stray)
+    db_session.flush()
+    db_session.add(WorkOrder(complaint_id=stray.id, tenant_id=other.id, status="completed", sla_hours=24,
+                             actual_cost=9000.0, created_at=utcnow() - timedelta(hours=9),
+                             completed_at=utcnow()))
+    db_session.commit()
+
+    ingest_cases(embedder=FakeEmbedder(), index_dir=tmp_path / "cases", session_factory=lambda: db_session)
+    retriever = load_cases_retriever(embedder=FakeEmbedder(), index_dir=tmp_path / "cases")
+    hits = retriever.search("pothole", k=5, fetch_k=200, filters={"tenant_id": complaint.tenant_id})
+    assert hits
+    assert all(h.chunk.metadata["tenant_id"] == complaint.tenant_id for h in hits)

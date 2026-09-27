@@ -9,6 +9,11 @@ separate the problem from its resolution.
 The collection lives in its own index directory. FaissStore.save overwrites
 whatever directory it is given, so sharing one with the policy corpus would
 wipe it on every rebuild.
+
+One caveat on metadata: _sync_collection is idempotent on the *text* hash, so
+changing what case_record_metadata returns does not re-index anything. Picking
+up a metadata change means deleting the index directory and its Document rows,
+then running `python -m app.ai.rag.ingest --collection cases` again.
 """
 
 from collections.abc import Callable
@@ -40,9 +45,13 @@ def case_record_text(complaint, work_order) -> str:
 
 
 def case_record_metadata(complaint) -> dict:
+    """Filterable facets. `tenant_id` is the load-bearing one: one index holds
+    every tenant's cases, so the filter is all that keeps a municipality's risk
+    scores from being grounded in another municipality's outcomes."""
     return {
         "collection": CASES_COLLECTION,
         "doc_type": "case",
+        "tenant_id": complaint.tenant_id,
         "category": complaint.category,
         "district": complaint.district,
         "risk_level": complaint.risk_level,

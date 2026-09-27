@@ -34,9 +34,13 @@ def assess_risk_node(state: ComplaintState, config: RunnableConfig) -> dict:
                       node="assess_risk", k=2, filters={"doc_type": "sla_policy"})
     evidence = list(policy.chunks)
     errors = [policy.error] if policy.error else []
-    if deps.cases_retriever is not None:
-        cases = retrieve(deps.cases_retriever, state["description"],
-                         node="assess_risk", k=3, filters={"category": category})
+    # No tenant, no precedent: an unscoped query would span every tenant, which
+    # is the same reason route_node fails closed on a tenant-less complaint.
+    # Absence of precedent is normal, so it is not recorded as an error.
+    tenant_id = state["tenant_id"]
+    if deps.cases_retriever is not None and tenant_id is not None:
+        cases = retrieve(deps.cases_retriever, state["description"], node="assess_risk", k=3,
+                         filters={"category": category, "tenant_id": tenant_id})
         evidence.extend(cases.chunks)
         if cases.error:
             errors.append(cases.error)
