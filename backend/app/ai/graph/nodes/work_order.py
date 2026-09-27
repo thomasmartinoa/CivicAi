@@ -69,7 +69,11 @@ def work_order_node(state: ComplaintState, config: RunnableConfig) -> dict:
             "description": state["description"],
             "evidence": format_evidence(evidence),
         })
-        estimated_cost = estimate.estimated_cost
+        # A zero is a refusal expressed badly: no municipal job is free, and the
+        # first live run produced exactly this -- 0.0 alongside a basis saying no
+        # rate card line applied. Treat it as no estimate so nothing downstream
+        # reports free work.
+        estimated_cost = estimate.estimated_cost or None
         cost_basis = estimate.cost_basis
         materials = estimate.materials
     except Exception as exc:

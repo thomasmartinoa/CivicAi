@@ -142,3 +142,34 @@ def test_a_failing_tenant_lookup_still_produces_a_window(make_config, base_state
                                                 sla_hours=boom))
     assert update["work_order"].sla_hours == DEFAULT_SLA_HOURS[RiskLevel.HIGH]
     assert any("database gone" in e for e in update["errors"])
+
+
+def test_a_declined_estimate_is_stored_as_no_cost_not_as_zero(make_config, base_state):
+    """Found by the first live run: the model said "the evidence has no rate card
+    line for this" and returned 0.0, because estimated_cost was a required float.
+    A work order priced at zero reads as free work, and it would have poisoned
+    every cost number in the Phase 3 eval."""
+    estimate = CostEstimate(estimated_cost=None, cost_basis="no applicable rate card line [1]",
+                            materials="Backfill soil, aggregate")
+    update = work_order_node(_state(base_state, RiskLevel.HIGH, 60),
+                             make_config(work_order_chain=returns(estimate)))
+    draft = update["work_order"]
+    assert draft.estimated_cost is None
+    assert draft.cost_basis == "no applicable rate card line [1]"
+    assert draft.materials == "Backfill soil, aggregate", "the materials are still useful"
+    # The retrieval error is expected -- no retriever was configured -- but the
+    # chain itself succeeded, so nothing may report a cost failure.
+    assert not any("estimate" in e for e in update["errors"]), (
+        "declining to guess is not a failure")
+
+
+def test_a_zero_cost_is_treated_as_no_estimate(make_config, base_state):
+    """Belt and braces: the schema now lets the model return null, but a model
+    that answers 0.0 anyway must not produce a free work order. No municipal job
+    costs nothing, so zero is a refusal expressed badly."""
+    estimate = CostEstimate(estimated_cost=0.0, cost_basis="could not find a rate [1]",
+                            materials="Backfill soil")
+    update = work_order_node(_state(base_state, RiskLevel.HIGH, 60),
+                             make_config(work_order_chain=returns(estimate)))
+    assert update["work_order"].estimated_cost is None
+    assert "could not find a rate [1]" in update["work_order"].cost_basis

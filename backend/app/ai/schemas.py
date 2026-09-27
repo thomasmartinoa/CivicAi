@@ -153,7 +153,11 @@ class CostEstimate(BaseModel):
     """What the rate-card chain returns. Folded into WorkOrderDraft by the node;
     never stored in state on its own, so it is not in CHECKPOINT_ALLOWLIST."""
 
-    estimated_cost: float = Field(ge=0.0, description="Total estimated cost in rupees, from the cited rate card lines")
+    estimated_cost: float | None = Field(
+        default=None, ge=0.0,
+        description="Total estimated cost in rupees from the cited rate card lines, "
+                    "or null when the evidence has no applicable line. Never 0 as a "
+                    "way of saying you could not price it.")
     cost_basis: str = Field(description="Which rate card lines and quantities were used, citing evidence as [n]")
     materials: str = Field(description="Materials and equipment needed, one line")
 
