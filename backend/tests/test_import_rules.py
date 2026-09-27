@@ -90,3 +90,16 @@ def test_import_rules_detect_violations(tmp_path):
         )
     finally:
         APP = original
+
+
+def test_nothing_outside_evals_imports_evals():
+    """The eval harness is a consumer of the application, never a dependency of
+    it. A node that imported a metric, or a service that read the golden set,
+    would put test fixtures in the production path."""
+    offenders = []
+    for path in APP.rglob("*.py"):
+        if path.is_relative_to(APP / "evals"):
+            continue
+        if any(name.startswith("app.evals") for name in _imports_in(path)):
+            offenders.append(str(path.relative_to(APP)))
+    assert not offenders, f"app/evals must not be imported by the application: {offenders}"
