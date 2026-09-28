@@ -88,6 +88,42 @@ def append_log(path: Path, *, config: str, item_id: str, dataset: str,
         handle.flush()
 
 
+def take_slice(items: list[GoldenItem], limit: int | None) -> list[GoldenItem]:
+    """A deterministic slice that spans the dataset.
+
+    Two runs at the same limit must give the same items, or small runs cannot be
+    compared with each other. But taking the first N by id took only `amb-*` items
+    in the first real sweep, so a 20-item run measured nothing but the ambiguous
+    slice while the report looked like a general sample.
+
+    So: order by id inside each primary tag, then deal round-robin across tags. The
+    result is stable, and every slice of the dataset appears before any slice is
+    exhausted.
+    """
+    ordered = sorted(items, key=lambda i: i.id)
+    if limit is None or limit >= len(ordered):
+        return ordered
+
+    by_tag: dict[str, list[GoldenItem]] = {}
+    for item in ordered:
+        # The first tag is the item's primary character; untagged items share a bucket.
+        by_tag.setdefault(item.tags[0] if item.tags else "untagged", []).append(item)
+
+    taken: list[GoldenItem] = []
+    round_index = 0
+    while len(taken) < limit:
+        added = False
+        for tag in sorted(by_tag):
+            bucket = by_tag[tag]
+            if round_index < len(bucket) and len(taken) < limit:
+                taken.append(bucket[round_index])
+                added = True
+        if not added:
+            break
+        round_index += 1
+    return taken
+
+
 # ── scoring ─────────────────────────────────────────────────────────────────
 
 
@@ -100,7 +136,13 @@ def summarise(label: str, items: list[GoldenItem], predictions: list[Prediction]
     risk rows rather than 0.0.
     """
     errored = sum(1 for p in predictions if p.error)
-    scored = [(i, p) for i, p in zip(items, predictions) if not p.error]
+    # Every pair list below is built over *all* predictions, filtered on the field
+    # it needs. Dropping an item because it carried any error at all threw away
+    # ten good classifications in the first real sweep: the free tier caps the
+    # strong model at 20 requests a day, so assess_risk started failing while
+    # classify kept working perfectly. A metric is scored over the items where its
+    # own field exists.
+    scored = list(zip(items, predictions))
 
     valid_pairs = [(i.expected_valid, p.valid) for i, p in scored if p.valid is not None]
     category_pairs = [(i.expected_category.value, p.category.value) for i, p in scored
@@ -142,6 +184,16 @@ def summarise(label: str, items: list[GoldenItem], predictions: list[Prediction]
                                            [p for _, p in category_pairs],
                                            labels=CATEGORY_LABELS) if category_pairs else {},
         per_tag=_per_tag(scored),
+        counts={
+            "classification_accuracy": len(category_pairs),
+            "macro_f1": len(category_pairs),
+            "department_accuracy": len(department_pairs),
+            "risk_band_accuracy": len(band_pairs),
+            "priority_mae": len(priority_pairs),
+            "invalid_precision": len(valid_pairs),
+            "invalid_recall": len(valid_pairs),
+            "latency_p95_ms": len(predictions),
+        },
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost=estimated_cost(input_tokens, output_tokens, rates),
@@ -186,9 +238,7 @@ def _per_tag(scored: list[tuple[GoldenItem, Prediction]]) -> dict[str, float | N
 
 def run(*, suite: str, config_labels: list[str], limit: int | None, out_dir: Path,
         log_path: Path, resume: bool, write_db: bool) -> tuple[Path, list[ConfigurationSummary], str]:
-    items = load_golden()
-    # Deterministic slice, not a sample: two --limit 10 runs must be comparable.
-    items = sorted(items, key=lambda i: i.id)[:limit] if limit else sorted(items, key=lambda i: i.id)
+    items = take_slice(load_golden(), limit)
     digest = dataset_hash(items)
     rates = load_cost_rates(settings.eval_cost_rates_path)
     previous = load_log(log_path) if resume else {}

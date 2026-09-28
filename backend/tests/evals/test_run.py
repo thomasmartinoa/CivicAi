@@ -13,7 +13,7 @@ import pytest
 from app.constants import CATEGORY_DEPARTMENT, Category, RiskLevel
 from app.evals.configurations import Prediction
 from app.evals.dataset import load_golden
-from app.evals.run import CONFIGURATIONS, append_log, load_log, run, summarise
+from app.evals.run import CONFIGURATIONS, append_log, load_log, run, summarise, take_slice
 
 
 class StubConfiguration:
@@ -67,7 +67,7 @@ def test_the_limit_takes_a_deterministic_slice(tmp_path, stub):
     first = list(stub.calls)
     _run(tmp_path, stub, limit=5, log_path=tmp_path / "second.jsonl")
     assert stub.calls == first
-    assert first == sorted(i.id for i in load_golden())[:5]
+    assert first == [i.id for i in take_slice(load_golden(), 5)]
 
 
 def test_every_prediction_is_logged_as_it_completes(tmp_path, stub):
@@ -113,20 +113,28 @@ def test_a_logged_prediction_round_trips(tmp_path):
 
 
 def test_an_errored_item_is_counted_and_not_scored(tmp_path, stub):
-    items = sorted(load_golden(), key=lambda i: i.id)[:5]
+    items = take_slice(load_golden(), 5)
     stub.answers = {items[0].id: Prediction(error="quota exceeded", latency_ms=3)}
     path = _run(tmp_path, stub)
     text = path.read_text(encoding="utf-8")
     errored_row = next(line for line in text.splitlines() if line.startswith("| Items errored"))
-    scored_row = next(line for line in text.splitlines() if line.startswith("| Items scored"))
-    assert "1" in errored_row
-    assert "4" in scored_row, "the failed item must leave the denominator, visibly"
+    attempted_row = next(line for line in text.splitlines() if line.startswith("| Items attempted"))
+    assert "1" in errored_row, "the failure is on the page"
+    assert "5" in attempted_row
+    accuracy_row = next(line for line in text.splitlines()
+                        if line.startswith("| Classification accuracy"))
+    # Derived, not hardcoded: the slice spans the dataset, so how many of its items
+    # even have an expected category depends on what the slice picked up.
+    classifiable = sum(1 for i in items[1:] if i.expected_category)
+    assert f"n={classifiable}" in accuracy_row, (
+        f"the metric's own n must show what it was computed over: {accuracy_row}"
+    )
 
 
 def test_metrics_a_configuration_cannot_produce_stay_none(tmp_path, stub):
     """The keyword column in miniature: no risk band anywhere means the risk rows
     are not applicable rather than 0.00."""
-    items = sorted(load_golden(), key=lambda i: i.id)[:5]
+    items = take_slice(load_golden(), 5)
     stub.answers = {
         i.id: Prediction(valid=True, category=i.expected_category,
                          department=i.expected_department, latency_ms=2)
@@ -168,3 +176,71 @@ def test_a_configuration_with_no_risk_model_is_not_applicable_on_the_injection_s
                                 department=i.expected_department, risk_band=None, latency_ms=1)
                      for i in items]
     assert summarise("keyword", items, no_risk_model, reused=0, rates=None).per_tag["injection"] is None
+
+
+def test_a_partial_failure_still_scores_the_fields_that_succeeded():
+    """Found by the first llm_only sweep. The free tier caps the strong model at
+    20 requests a day, so assess_risk started failing half way through while
+    classify kept working — and the whole item was dropped from every metric,
+    throwing away ten perfectly good classifications and collapsing macro-F1.
+
+    A metric is computed over the items where *that field* exists, not over items
+    with no errors anywhere."""
+    items = sorted(load_golden(), key=lambda i: i.id)[:4]
+    predictions = [
+        # Two complete.
+        Prediction(valid=True, category=items[0].expected_category,
+                   department=items[0].expected_department,
+                   risk_band=items[0].expected_risk_band, priority=items[0].expected_priority,
+                   latency_ms=1),
+        Prediction(valid=True, category=items[1].expected_category,
+                   department=items[1].expected_department,
+                   risk_band=items[1].expected_risk_band, priority=items[1].expected_priority,
+                   latency_ms=1),
+        # Two classified fine but lost the risk assessment to a quota error.
+        Prediction(valid=True, category=items[2].expected_category,
+                   department=items[2].expected_department, risk_band=None, priority=None,
+                   latency_ms=1, error="assess_risk: 429 RESOURCE_EXHAUSTED"),
+        Prediction(valid=True, category=items[3].expected_category,
+                   department=items[3].expected_department, risk_band=None, priority=None,
+                   latency_ms=1, error="assess_risk: 429 RESOURCE_EXHAUSTED"),
+    ]
+    summary = summarise("llm_only", items, predictions, reused=0, rates=None)
+
+    assert summary.errored == 2, "the failures are still counted and reported"
+    assert summary.metrics["classification_accuracy"] == 1.0, (
+        "all four classifications were correct and all four must count"
+    )
+    assert summary.counts["classification_accuracy"] == 4
+    assert summary.counts["risk_band_accuracy"] == 2, "only two items reached the risk model"
+
+
+def test_the_summary_records_how_many_items_each_metric_saw():
+    """macro-F1 over ten items across twelve categories is not comparable with
+    macro-F1 over a hundred. The n has to travel with the number."""
+    items = sorted(load_golden(), key=lambda i: i.id)[:3]
+    predictions = [Prediction(valid=True, category=i.expected_category,
+                              department=i.expected_department, latency_ms=1) for i in items]
+    summary = summarise("stub", items, predictions, reused=0, rates=None)
+    assert summary.counts["classification_accuracy"] == 3
+    assert summary.counts["risk_band_accuracy"] == 0
+
+
+def test_a_limited_slice_is_spread_across_the_dataset_not_the_first_ids():
+    """Found by the first llm_only sweep: --limit 20 took the first twenty ids,
+    which are all `amb-*`, so the run measured nothing but ambiguous items while
+    the report looked like a general sample. The slice must stay deterministic —
+    two runs at the same limit have to be comparable — but it has to span the
+    dataset."""
+    from app.evals.run import take_slice
+
+    items = load_golden()
+    twenty = take_slice(items, 20)
+    assert len(twenty) == 20
+    assert take_slice(items, 20) == twenty, "the same limit must give the same items"
+
+    tags = {t for i in twenty for t in i.tags}
+    assert len(tags) >= 5, f"only {sorted(tags)} represented"
+    assert any(not i.expected_valid for i in twenty), "junk must be represented"
+    assert take_slice(items, None) == sorted(items, key=lambda i: i.id)
+    assert len(take_slice(items, 1000)) == len(items)

@@ -88,6 +88,7 @@ def test_the_report_states_how_many_items_errored():
     denominator where the accuracy looks unaffected."""
     text = render_report([_summary("full", items=100, errored=3)], provenance=_provenance())
     assert "3" in text and "errored" in text.lower()
+    assert "Items attempted" in text
 
 
 def test_the_report_says_when_predictions_were_reused_from_a_resumed_run():

@@ -37,6 +37,10 @@ class ConfigurationSummary:
     items: int
     errored: int
     metrics: dict[str, float | None]
+    counts: dict[str, int] = field(default_factory=dict)
+    """How many items each metric was computed over. macro-F1 across twelve
+    categories over ten items is not comparable with the same number over a
+    hundred, so the n travels with the value."""
     confusion: dict[str, dict[str, int]] = field(default_factory=dict)
     per_tag: dict[str, float | None] = field(default_factory=dict)
     reused: int = 0
@@ -70,9 +74,20 @@ def _metrics_table(summaries: list[ConfigurationSummary]) -> str:
     for key, label, kind in METRIC_ROWS:
         if key == "department_accuracy":
             label += " *(derived from the category)*"
-        rows.append([label, *(_format(s.metrics.get(key), kind) for s in summaries)])
-    rows.append(["Items scored", *(str(s.items - s.errored) for s in summaries)])
-    rows.append(["Items errored", *(str(s.errored) for s in summaries)])
+        cells = []
+        for summary in summaries:
+            value = _format(summary.metrics.get(key), kind)
+            n = summary.counts.get(key)
+            # The n is part of the claim, not a footnote: a metric computed over a
+            # handful of items must not sit in a table looking like one computed
+            # over the whole set.
+            cells.append(value if value == NOT_APPLICABLE or n is None else f"{value} (n={n})")
+        rows.append([label, *cells])
+    # Not "items scored": a metric's own n is on its row, because an item can
+    # fail at one node and still contribute to the metrics from the nodes that
+    # succeeded.
+    rows.append(["Items attempted", *(str(s.items) for s in summaries)])
+    rows.append(["Items errored (partly or wholly)", *(str(s.errored) for s in summaries)])
     rows.append(["Predictions reused (resumed)", *(str(s.reused) for s in summaries)])
     rows.append(["Input tokens", *(str(s.input_tokens) if s.input_tokens is not None
                                    else NOT_APPLICABLE for s in summaries)])
