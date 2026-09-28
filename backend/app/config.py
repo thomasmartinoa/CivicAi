@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # rate-limits aggressively and a 100-item eval sweep will hit it.
     llm_requests_per_second: float = 0.5
     llm_max_retries: int = 3
+    # A stalled connection must fail rather than hang. Without this an eval sweep
+    # sat on one request for five minutes with no response and no retry, and a
+    # complaint's background run would have waited for ever -- never completing and
+    # never failing, which is the worst of both.
+    llm_timeout_seconds: int = 60
 
     # ── Email ─────────────────────────────────────────────────
     smtp_host: str = "localhost"

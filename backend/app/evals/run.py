@@ -16,6 +16,7 @@ the report prints how many predictions were reused.
 import argparse
 import json
 import logging
+import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,23 @@ from app.evals.report import ConfigurationSummary, render_report
 from app.evals.usage import estimated_cost, load_cost_rates, token_counter
 
 logger = logging.getLogger(__name__)
+
+MAX_CONSECUTIVE_PROVIDER_FAILURES = 3
+"""After this many provider failures in a row, stop. A 503 "high demand" or a daily
+quota does not clear in the next thirty seconds, and each failed item costs ~50
+seconds of retry backoff — LangChain's three attempts times the client's three,
+behind the shared rate limiter. Grinding through forty of those produces a wall of
+tracebacks and no information."""
+
+# Substrings that mean "the provider, not our code". Deliberately narrow: a
+# ValidationError from our own schema is a result to record, not an outage.
+_PROVIDER_FAILURES = ("503", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "429", "quota")
+
+
+class ProviderUnavailable(RuntimeError):
+    """The provider failed repeatedly, so the run stopped early. Whatever
+    succeeded is already in the log and a later --resume picks up from there."""
+
 
 CONFIGURATIONS = {
     "keyword": KeywordConfiguration,
@@ -96,6 +114,11 @@ def append_log(path: Path, *, config: str, item_id: str, dataset: str,
         handle.write(json.dumps({"config": config, "item": item_id,
                                  "dataset_hash": dataset, "prediction": payload}) + "\n")
         handle.flush()
+
+
+def _is_provider_failure(error: str | None) -> bool:
+    """True for an outage or a quota wall, false for our own errors."""
+    return bool(error) and any(marker in error for marker in _PROVIDER_FAILURES)
 
 
 def force_flash_tier() -> dict[str, tuple[str, str]]:
@@ -286,7 +309,7 @@ def run(*, suite: str, config_labels: list[str], limit: int | None, out_dir: Pat
     summaries = []
     for label in config_labels:
         configuration = CONFIGURATIONS[label]()
-        predictions, reused = [], 0
+        predictions, reused, consecutive = [], 0, 0
         for index, item in enumerate(items, start=1):
             cached = previous.get(_key(label, item.id)) if resume else None
             if cached is not None:
@@ -300,6 +323,17 @@ def run(*, suite: str, config_labels: list[str], limit: int | None, out_dir: Pat
             predictions.append(prediction)
             append_log(log_path, config=label, item_id=item.id, dataset=digest,
                        prediction=prediction)
+            if _is_provider_failure(prediction.error):
+                consecutive += 1
+                if consecutive >= MAX_CONSECUTIVE_PROVIDER_FAILURES:
+                    raise ProviderUnavailable(
+                        f"{consecutive} provider failures in a row on {label}; last was: "
+                        f"{prediction.error}\n\nThe successful predictions are in "
+                        f"{log_path}. Re-run the same command with --resume when the "
+                        f"provider recovers; it will reuse them and retry only what failed."
+                    )
+            else:
+                consecutive = 0
             logger.info("%s %d/%d %s -> %s (%dms)%s", label, index, len(items), item.id,
                         prediction.category.value if prediction.category else
                         ("invalid" if prediction.valid is False else "error"),
@@ -371,9 +405,17 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     labels = list(CONFIGURATIONS) if args.config == "all" else [args.config]
-    path, summaries, digest = run(suite=args.suite, config_labels=labels, limit=args.limit,
-                                  out_dir=args.out, log_path=args.log, resume=args.resume,
-                                  write_db=not args.no_db, flash_only=args.flash_only)
+    try:
+        path, summaries, digest = run(
+            suite=args.suite, config_labels=labels, limit=args.limit, out_dir=args.out,
+            log_path=args.log, resume=args.resume, write_db=not args.no_db,
+            flash_only=args.flash_only,
+        )
+    except ProviderUnavailable as exc:
+        # Not a traceback: this is an expected outcome on a free tier, and the
+        # operator needs the next command rather than a stack.
+        print(f"\nstopped: {exc}", file=sys.stderr)
+        return 3
     print(f"\nreport: {path}")
 
     if not args.gate:

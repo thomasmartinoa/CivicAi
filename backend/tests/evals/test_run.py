@@ -336,3 +336,58 @@ def test_the_log_still_records_the_failure_for_inspection():
                    prediction=Prediction(error="validate: 503", latency_ms=1))
         rows = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
         assert rows[0]["prediction"]["error"] == "validate: 503"
+
+
+def test_a_dead_provider_aborts_early_instead_of_grinding(tmp_path, stub, capsys):
+    """Real use found this: gemini-3.5-flash-lite returned 503 "high demand" for
+    every request, and the sweep ground through item after item at ~50s each —
+    LangChain's three retries times the client's three, behind a rate limiter —
+    printing a wall of tracebacks and no useful message. Three consecutive provider
+    failures now stop the run and say why."""
+    from app.evals.run import MAX_CONSECUTIVE_PROVIDER_FAILURES, ProviderUnavailable
+
+    stub.answers = {
+        i.id: Prediction(error="validate: 503 UNAVAILABLE. This model is currently "
+                               "experiencing high demand.", latency_ms=48000)
+        for i in take_slice(load_golden(), 10)
+    }
+    with pytest.raises(ProviderUnavailable, match="503"):
+        _run(tmp_path, stub, limit=10)
+    assert len(stub.calls) == MAX_CONSECUTIVE_PROVIDER_FAILURES, (
+        "it must stop after the threshold, not attempt the whole set"
+    )
+
+
+def test_a_quota_error_also_aborts_early(tmp_path, stub):
+    """A daily quota does not come back in the next thirty seconds either."""
+    from app.evals.run import ProviderUnavailable
+
+    stub.answers = {
+        i.id: Prediction(error="assess_risk: 429 RESOURCE_EXHAUSTED quota", latency_ms=200)
+        for i in take_slice(load_golden(), 10)
+    }
+    with pytest.raises(ProviderUnavailable, match="429|quota"):
+        _run(tmp_path, stub, limit=10)
+
+
+def test_an_occasional_failure_does_not_abort_the_run(tmp_path, stub):
+    """One bad item in ten is what the errored count is for. Only an unbroken run
+    of provider failures means the provider is down."""
+    items = take_slice(load_golden(), 6)
+    stub.answers = {
+        items[0].id: Prediction(error="validate: 503 UNAVAILABLE", latency_ms=1),
+        items[2].id: Prediction(error="validate: 503 UNAVAILABLE", latency_ms=1),
+        items[4].id: Prediction(error="classify: 503 UNAVAILABLE", latency_ms=1),
+    }
+    path = _run(tmp_path, stub, limit=6)
+    assert path.exists(), "the run completed and wrote its report"
+
+
+def test_a_model_failure_that_is_not_the_provider_does_not_abort(tmp_path, stub):
+    """A validation error from our own schema is a result, not an outage."""
+    stub.answers = {
+        i.id: Prediction(error="classify: ValidationError 1 validation error for "
+                               "ClassificationResult", latency_ms=5)
+        for i in take_slice(load_golden(), 5)
+    }
+    assert _run(tmp_path, stub, limit=5).exists()

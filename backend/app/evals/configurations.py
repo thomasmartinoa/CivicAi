@@ -131,13 +131,18 @@ class _GraphConfiguration:
         from app.ai.schemas import ClassificationResult, RiskAssessment, ValidationResult
 
         version = self.PROMPT_VERSIONS.get
+        # One attempt per chain, not three. The sweep is its own retry loop: it
+        # logs every failure, aborts on a run of provider errors, and a later
+        # --resume retries exactly those items. Stacking the chain's retries on the
+        # client's meant a single item cost over two minutes against a 503-ing
+        # provider, for a failure the harness was going to record anyway.
         deps = GraphDeps(
             validate_chain=build_structured(Task.VALIDATE, ValidationResult, "validate",
-                                            version("validate"), cache=None),
+                                            version("validate"), cache=None, retries=1),
             classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify",
-                                            version("classify"), cache=None),
+                                            version("classify"), cache=None, retries=1),
             risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk",
-                                        version("assess_risk"), cache=None),
+                                        version("assess_risk"), cache=None, retries=1),
         )
         if not self.USE_RETRIEVERS:
             return deps

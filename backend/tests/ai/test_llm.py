@@ -124,3 +124,87 @@ def test_fake_models_cannot_do_structured_output():
     fake = GenericFakeChatModel(messages=iter([AIMessage(content="{}")]))
     with pytest.raises(NotImplementedError):
         fake.with_structured_output(ClassificationResult)
+
+
+def test_build_structured_can_be_asked_for_fewer_retries(monkeypatch):
+    """An eval sweep has its own outer loop and its own fail-fast, so it does not
+    want the chain's three attempts stacked on the client's three. A live sweep
+    against a 503-ing provider spent over two minutes per item on retries before
+    reporting a failure the harness was going to record anyway."""
+    from langchain_core.runnables import RunnableLambda
+
+    from app.ai import llm
+    from app.ai.schemas import ValidationResult
+
+    class StubModel:
+        def with_structured_output(self, schema):
+            return RunnableLambda(lambda _: ValidationResult(is_valid=True))
+
+    monkeypatch.setattr(llm, "build_chat_model", lambda task: StubModel())
+
+    once = llm.build_structured(llm.Task.VALIDATE, ValidationResult, "validate", retries=1)
+    assert once.invoke({"description": "a pothole"}).is_valid is True
+
+    with pytest.raises(ValueError, match="at least 1"):
+        llm.build_structured(llm.Task.VALIDATE, ValidationResult, "validate", retries=0)
+
+
+def test_retries_default_to_three_so_production_is_unchanged(monkeypatch):
+    from langchain_core.runnables import RunnableLambda
+
+    from app.ai import llm
+    from app.ai.schemas import ValidationResult
+
+    attempts = []
+
+    class Flaky:
+        def with_structured_output(self, schema):
+            def fail(_):
+                attempts.append(1)
+                raise RuntimeError("503 UNAVAILABLE")
+            return RunnableLambda(fail)
+
+    monkeypatch.setattr(llm, "build_chat_model", lambda task: Flaky())
+    chain = llm.build_structured(llm.Task.VALIDATE, ValidationResult, "validate")
+    with pytest.raises(RuntimeError):
+        chain.invoke({"description": "a pothole"})
+    assert len(attempts) == 3, "production keeps its three attempts"
+
+    attempts.clear()
+    with pytest.raises(RuntimeError):
+        llm.build_structured(llm.Task.VALIDATE, ValidationResult, "validate",
+                             retries=1).invoke({"description": "a pothole"})
+    assert len(attempts) == 1, "an eval asks for one"
+
+
+def test_the_gemini_client_is_given_a_request_timeout(monkeypatch):
+    """Found the hard way: an eval sweep sat on a single request for five minutes
+    with no response and no retry — the connection had stalled, and nothing in the
+    stack had a timeout. In production that hangs a complaint's background run
+    forever, which is worse: the run never completes and never fails."""
+    from app.ai import llm
+    from app.config import settings
+
+    captured = {}
+
+    class FakeChat:
+        model_fields = {"timeout": None}
+
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import langchain_google_genai
+    monkeypatch.setattr(langchain_google_genai, "ChatGoogleGenerativeAI", FakeChat)
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key")
+
+    llm._build_one("gemini", llm.Task.CLASSIFY)
+    assert captured["timeout"] == settings.llm_timeout_seconds
+    assert settings.llm_timeout_seconds > 0
+
+
+def test_the_timeout_is_long_enough_for_a_slow_model_but_not_forever():
+    """Long enough that a genuinely slow structured-output call is not cut off,
+    short enough that a stalled socket surfaces as an error the node can record."""
+    from app.config import settings
+
+    assert 20 <= settings.llm_timeout_seconds <= 180

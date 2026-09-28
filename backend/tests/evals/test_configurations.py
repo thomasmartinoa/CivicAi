@@ -176,8 +176,9 @@ def test_every_chain_is_built_with_the_cache_switched_off(monkeypatch):
 
     calls = []
 
-    def record(task, schema, prompt_name, prompt_version=None, *, cache=None):
-        calls.append({"prompt": prompt_name, "version": prompt_version, "cache": cache})
+    def record(task, schema, prompt_name, prompt_version=None, *, cache=None, retries=3):
+        calls.append({"prompt": prompt_name, "version": prompt_version,
+                      "cache": cache, "retries": retries})
         return returns(None)
 
     monkeypatch.setattr(llm, "build_structured", record)
@@ -187,6 +188,10 @@ def test_every_chain_is_built_with_the_cache_switched_off(monkeypatch):
         configuration._build_deps()
         assert calls, f"{configuration.label} built no chains"
         assert all(c["cache"] is None for c in calls), f"{configuration.label}: {calls}"
+        assert all(c["retries"] == 1 for c in calls), (
+            "the sweep is its own retry loop: nine stacked attempts cost two minutes "
+            f"per item against a provider that is down — {calls}"
+        )
 
 
 def test_the_ungrounded_column_pins_its_prompt_versions(monkeypatch):
@@ -195,7 +200,7 @@ def test_the_ungrounded_column_pins_its_prompt_versions(monkeypatch):
 
     calls = {}
 
-    def record(task, schema, prompt_name, prompt_version=None, *, cache=None):
+    def record(task, schema, prompt_name, prompt_version=None, *, cache=None, retries=3):
         calls[prompt_name] = prompt_version
         return returns(None)
 

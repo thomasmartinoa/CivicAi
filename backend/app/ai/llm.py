@@ -108,6 +108,9 @@ def _build_one(provider: str, task: Task) -> BaseChatModel:
             google_api_key=settings.gemini_api_key,
             rate_limiter=SHARED_RATE_LIMITER,
             max_retries=settings.llm_max_retries,
+            # Without this a stalled connection hangs the caller indefinitely: a
+            # node waits for ever, so the complaint neither completes nor fails.
+            timeout=settings.llm_timeout_seconds,
         )
     if provider == "ollama":
         try:
@@ -153,6 +156,7 @@ def build_structured(
     prompt_version: str | None = None,
     *,
     cache: "SemanticCache | None" = None,
+    retries: int = 3,
 ) -> Runnable:
     """A prompt-to-validated-object chain, ready to hand a node.
 
@@ -163,11 +167,19 @@ def build_structured(
     With a cache, the whole chain (prompt and model) sits behind the semantic
     lookup, keyed on the prompt variables — so the cache sees the same text
     whichever prompt version is active.
+
+    `retries` is the chain's own attempt count, which stacks multiplicatively with
+    `max_retries` on the client (see SHARED_RATE_LIMITER above). Production wants
+    three. A caller with its own outer loop and its own fail-fast — the eval sweep —
+    passes 1, because nine attempts behind a rate limiter cost over two minutes per
+    item against a provider that is simply down.
     """
+    if retries < 1:
+        raise ValueError(f"retries must be at least 1, got {retries}")
     model = build_chat_model(task)
     chain = get_prompt(prompt_name, prompt_version) | model.with_structured_output(
         schema
-    ).with_retry(stop_after_attempt=3)
+    ).with_retry(stop_after_attempt=retries)
     if cache is None:
         return chain
 
