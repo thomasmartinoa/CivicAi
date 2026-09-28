@@ -7,7 +7,7 @@ from app.ai.prompts import LATEST, PROMPT_REGISTRY, get_prompt
 def test_every_expected_prompt_is_registered():
     assert set(LATEST) == {"validate", "classify", "investigate", "assess_risk",
                            "vision", "work_order", "work_order_cluster", "briefing",
-                           "email_draft"}
+                           "email_draft", "judge"}
 
 
 def test_get_prompt_returns_the_latest_version_by_default():
@@ -169,3 +169,16 @@ def test_the_email_draft_prompt_refuses_to_invent_specifics():
                              description="pothole", evidence="[1] sop_roads.md › Ownership")
     assert "do not invent" in rendered.lower()
     assert "<report>" in rendered and "<evidence>" in rendered
+
+
+def test_the_judge_prompt_scores_one_criterion_with_its_anchors():
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("judge")
+    assert set(prompt.input_variables) == {"criterion", "criterion_description",
+                                           "anchors", "artifact", "evidence"}
+    rendered = prompt.format(criterion="grounded", criterion_description="claims are cited",
+                             anchors="1: uncited\n5: fully cited", artifact="Public Works owns this",
+                             evidence="[1] sop_roads.md")
+    assert "score only this criterion" in rendered.lower()
+    assert "<artifact>" in rendered and "<evidence>" in rendered
