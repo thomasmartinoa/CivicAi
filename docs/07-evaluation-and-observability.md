@@ -219,6 +219,44 @@ read 1.00 while testing nothing at all. Two distractors per group now sit ~90 m 
 the group's origin, and with the threshold disabled precision falls to 0.30 — which
 is the proof the fixture can punish a bad threshold.
 
+### 4.4 Retrieval recall, without a judge
+
+`app/evals/retrieval_eval.py` asks one question seven times: for a query a node
+really issues, with the filters it really uses, at the `fetch_k` it really passes —
+did the chunk that answers it come back? Each case names a substring only the right
+chunk contains, so the answer is set membership rather than an opinion, and the whole
+suite costs seven embeddings and no chat calls.
+
+**recall@3 = 0.86, six of seven.**
+
+| case | result |
+|---|---|
+| `work_order.pothole` | found at rank 2 |
+| `work_order.cluster` | found at rank 1 |
+| `assess_risk.bands` | found at rank 3 |
+| `route.roads_ownership` | found at rank 1 |
+| `route.construction_ownership` | found at rank 1 |
+| `investigate.taxonomy` | found at rank 2 |
+| **`work_order.trench`** | **missed** |
+
+The miss is the one three live runs had already shown, now explained. The query
+"unit rates for CONSTRUCTION repair materials and labour" returns the rate card's
+three *prose* sections — Purpose, Notes on use, Grouped work at multiple sites — and
+never its unit-rates table. The identical query for ROADS finds the table at rank 2.
+
+The reason is the shape of the document, not the retriever: the table holds about
+thirty rows of which two are CONSTRUCTION, so for a CONSTRUCTION query that chunk is
+diluted by every other category's vocabulary, while the prose sections discuss rates
+in the query's own words. The structural fix is to make the table retrievable per
+category — chunk it by category, or carry `category` metadata per row so
+`work_order` can filter — and it is deliberately not applied here.
+
+Writing these cases caught two bugs in the cases themselves, both matching on a
+section *header*. Headers live in chunk metadata, not chunk text, so both reported a
+permanent miss while the right chunk was arriving at rank 1. A test now refuses any
+case whose `must_contain` is a header, which is the sort of thing that makes an eval
+quietly wrong for months.
+
 ---
 
 ## 5. What has *not* been measured, and why
@@ -234,9 +272,14 @@ on flash-lite and lost only its risk assessment. So **the phase's headline quest
 — does retrieval earn its place — is still open.** A complete three-column sweep is
 roughly 300 calls and needs a paid key or ten days of free quota.
 
-**Ragas is not implemented.** `context_precision`, `context_recall` and
-`faithfulness` over the chunks the nodes actually retrieved are Task 8 of the plan;
-the dependency has not been added. The join key they need does now exist — see §7.
+**Ragas is deliberately not used.** It computes `context_recall` and
+`faithfulness` by asking an LLM, so every metric costs model calls — and on a free
+tier capped at 20 strong-model requests a day that is the worst available thing to
+spend on. Where the answer is a fact about a corpus we wrote ourselves, a judge is
+also the wrong instrument: we know which chunk holds the rate for a trench, so "was
+it retrieved" is set membership, not opinion. §4.4 is the deterministic replacement.
+What Ragas would still add is **faithfulness** — whether generated prose only claims
+what the chunks support — which genuinely needs a judge and stays unmeasured.
 
 **The judges are not validated.** `app/evals/judges.py` scores the routing
 justification and the briefing against anchored rubrics, and
@@ -246,14 +289,10 @@ against hand labels. No hand labels have been written, so
 The labels are deliberately not generated: a judge validated against labels the
 same family of model produced would be measuring its own reflection.
 
-**Two known retrieval weaknesses are recorded but unmeasured.** The rate card
-contains `Excavation and trench reinstatement | CONSTRUCTION | per m³ | ₹900`, and
-three live runs retrieved three rate-card chunks without that row, so the work order
-correctly declined to price the job. And for "pothole outside a school gate" the top
-hit was `sop_education.md › Escalation`, above `sop_roads.md › Ownership` — BM25
-latching onto "school". Both are `context_recall`/`context_precision` questions,
-which is why they are waiting on Ragas rather than being tuned. Tuning retrieval on
-three anecdotes is how a project ends up with numbers it cannot explain.
+**The rate-card miss is measured and diagnosed but not fixed** — see §4.4.
+Phase 3's job is to measure; tuning retrieval inside the phase that measures it is
+how a project ends up with numbers it cannot explain. The fix now has a
+before-number to be judged against.
 
 ---
 
