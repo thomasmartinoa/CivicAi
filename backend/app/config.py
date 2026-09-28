@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     briefing_enabled: bool = True
     cases_refresh_enabled: bool = True
     briefing_hour: int = 8
+    # Where the operator wrote the per-token prices they were actually quoted.
+    # Empty by default and no rates are ever assumed: an invented price is the
+    # number most likely to be lifted into a README and quoted at somebody.
+    eval_cost_rates_file: str = ""
 
     # ── Storage ───────────────────────────────────────────────
     upload_dir: str = "./uploads"
@@ -82,6 +86,14 @@ class Settings(BaseSettings):
         """upload_dir anchored to the backend directory when relative, so store,
         serve and the vision adapter resolve it identically regardless of CWD."""
         raw = Path(self.upload_dir)
+        return raw if raw.is_absolute() else (BACKEND_DIR / raw).resolve()
+
+    @property
+    def eval_cost_rates_path(self) -> Path | None:
+        """The rates file, anchored like rag_index_path, or None when unset."""
+        if not self.eval_cost_rates_file:
+            return None
+        raw = Path(self.eval_cost_rates_file)
         return raw if raw.is_absolute() else (BACKEND_DIR / raw).resolve()
 
     @property
