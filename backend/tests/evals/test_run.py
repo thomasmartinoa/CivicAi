@@ -49,7 +49,8 @@ def _run(tmp_path, stub, **over):
     kwargs = dict(suite="core", config_labels=["stub"], limit=5, out_dir=tmp_path / "reports",
                   log_path=tmp_path / "log.jsonl", resume=False, write_db=False)
     kwargs.update(over)
-    return run(**kwargs)
+    path, _summaries, _digest = run(**kwargs)
+    return path
 
 
 def test_a_report_is_written_and_names_the_configuration(tmp_path, stub):

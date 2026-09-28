@@ -185,7 +185,7 @@ def _per_tag(scored: list[tuple[GoldenItem, Prediction]]) -> dict[str, float | N
 
 
 def run(*, suite: str, config_labels: list[str], limit: int | None, out_dir: Path,
-        log_path: Path, resume: bool, write_db: bool) -> Path:
+        log_path: Path, resume: bool, write_db: bool) -> tuple[Path, list[ConfigurationSummary], str]:
     items = load_golden()
     # Deterministic slice, not a sample: two --limit 10 runs must be comparable.
     items = sorted(items, key=lambda i: i.id)[:limit] if limit else sorted(items, key=lambda i: i.id)
@@ -222,7 +222,7 @@ def run(*, suite: str, config_labels: list[str], limit: int | None, out_dir: Pat
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path = out_dir / f"{datetime.now(timezone.utc):%Y-%m-%d}.md"
     report_path.write_text(render_report(summaries, provenance=provenance), encoding="utf-8")
-    return report_path
+    return report_path, summaries, digest
 
 
 def _provenance(digest: str, rates) -> dict:
@@ -258,7 +258,7 @@ def _record(suite: str, label: str, digest: str, summary: ConfigurationSummary) 
         session.close()
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the golden evaluation set.")
     parser.add_argument("--suite", default="core")
     parser.add_argument("--config", default="all", choices=[*CONFIGURATIONS, "all"])
@@ -270,14 +270,48 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--resume", action="store_true",
                         help="reuse predictions already in the log instead of calling the model")
     parser.add_argument("--no-db", action="store_true", help="do not write EvalRun rows")
+    parser.add_argument("--gate", action="store_true",
+                        help="exit nonzero if the full configuration's macro-F1 regressed")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     labels = list(CONFIGURATIONS) if args.config == "all" else [args.config]
-    path = run(suite=args.suite, config_labels=labels, limit=args.limit, out_dir=args.out,
-               log_path=args.log, resume=args.resume, write_db=not args.no_db)
+    path, summaries, digest = run(suite=args.suite, config_labels=labels, limit=args.limit,
+                                  out_dir=args.out, log_path=args.log, resume=args.resume,
+                                  write_db=not args.no_db)
     print(f"\nreport: {path}")
+
+    if not args.gate:
+        return 0
+    return _gate(summaries, digest)
+
+
+def _gate(summaries: list[ConfigurationSummary], digest: str) -> int:
+    """Compare the `full` column against the stored baseline.
+
+    The gate is about the configuration that ships, so a run that did not include
+    `full` cannot gate — and says so rather than passing.
+    """
+    from app.evals.gate import NoBaseline, check_gate, load_baseline
+
+    full = next((s for s in summaries if s.label == "full"), None)
+    if full is None:
+        print("gate: this run did not include the 'full' configuration, so there is "
+              "nothing to gate on", flush=True)
+        return 1
+
+    baseline = load_baseline()
+    try:
+        result = check_gate(current=full.metrics.get("macro_f1"),
+                            baseline=baseline.macro_f1 if baseline else None,
+                            current_dataset=digest,
+                            baseline_dataset=baseline.dataset_hash if baseline else None)
+    except (NoBaseline, ValueError) as exc:
+        print(f"gate: FAIL — {exc}")
+        return 1
+    print(f"gate: {'PASS' if result.passed else 'FAIL'} — {result.summary}")
+    return 0 if result.passed else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
