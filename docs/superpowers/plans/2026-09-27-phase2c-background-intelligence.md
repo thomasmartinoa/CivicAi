@@ -588,6 +588,24 @@ closed; two Phase 2b items remain open and are restated at the end.
   bump `cluster_size`, and re-price. It needs a decision about whether re-pricing
   a dispatched work order is allowed, which is why it is not a silent addition.
 
+**Clustering — now measured (Phase 3's clustering eval, 2026-09-28)**
+- **The threshold is validated.** On `gemini-embedding-001`, pair-wise precision
+  and recall over the duplicate slice are both 1.00 across 0.80–0.90, collapse to
+  0.00 recall at 0.95, and fall to 0.30 precision at 0.50–0.70. The configured
+  0.82 sits mid-band with margin either side. That item is closed.
+- **A new defect the sweep exposed: a greedy lead can steal a tighter group's
+  members.** At a marginal threshold an unrelated but higher-priority complaint
+  becomes the lead, matches part of a real group, and emits a cluster — and
+  because `claimed` then makes those members unavailable, the real group can no
+  longer form. Measured at threshold 0.75: `amb-fw-10` (priority 70) took `dup-1c`
+  and left `dup-1a`/`dup-1b` unclustered, dropping recall to 0.17. The detector is
+  therefore **non-monotonic in the threshold** and sensitive to priority ordering.
+  At the configured 0.82 it does not bite, which is luck rather than design.
+  The fix is to stop letting the first acceptable lead win: score candidate
+  clusters (mean intra-cluster similarity, say) and emit the best, or require a
+  lead to be mutually nearest with its members. Either needs a decision about
+  cost, since both mean comparing more pairs.
+
 **Clustering**
 - Unclustered complaints are re-embedded every hour, per tenant, forever. At a few
   hundred open complaints that is one cheap batch; at a few thousand it is a real
