@@ -294,6 +294,29 @@ def test_a_configuration_failure_becomes_a_recorded_error_not_a_crash():
 
 `python -m app.evals.run --suite core --layer 2 --config all --limit N --out docs/eval-reports/`
 
+**Amended after Task 4 measured the real thing.** Three configurations were run
+against three items with the live model: single items took 1.5s (`keyword`),
+27–61s (`llm_only`) and 122s (`full`). At roughly 45s an item for the two LLM
+columns, one full sweep of 100 items is **over two hours of wall clock**, most of
+it waiting on the free tier. A sweep that loses everything to one 429 or one
+Ctrl-C is not a tool anyone will run twice, so two requirements are added:
+
+- **`--resume`.** Every prediction is appended to a predictions log as it
+  completes, keyed by `(config_label, item_id)`; a resumed run skips what the log
+  already holds and only calls the model for what is missing. The log lives under
+  `backend/data/` (already gitignored) and the report states how many predictions
+  were reused rather than freshly measured, because a resumed sweep may straddle a
+  prompt change.
+- **`--limit N` takes a deterministic slice**, not a random sample: the first N
+  items by id, so two runs at `--limit 10` are comparable. A random subset would
+  make every small run incomparable with the last.
+
+Latency figures in the report must therefore be read as "wall clock including
+rate-limit waits", and the report prints `LLM_REQUESTS_PER_SECOND` beside them.
+Token counts come from `UsageMetadataCallbackHandler` (available in
+langchain-core 1.6), which is unaffected by the waiting.
+
+
 - `usage.py`: a LangChain callback capturing `usage_metadata` per call, wall-clock latency per item, and `estimated_cost(tokens, rates)` where `rates` is loaded from the JSON file at `settings.eval_cost_rates_path`. **No default rates.** The file does not exist until an operator writes it with the prices they were actually quoted, and until then every cost cell reads `not configured`. Inventing per-token prices in source would be the single most likely number to end up misquoted in a README.
 - `report.py`: markdown, one metrics table with the three configurations as columns, then the confusion matrix for the best configuration, then per-slice accuracy by tag (the injection and junk rows are the interesting ones), then a provenance block: date, git SHA, dataset name and hash, `GRAPH_VERSION`, every prompt version, model ids, and the count of items that errored.
 - `run.py`: wires it together, writes rows through Task 3, writes the file, prints the path.
