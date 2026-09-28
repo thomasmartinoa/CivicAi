@@ -14,6 +14,7 @@ from pathlib import Path
 
 from app.ai.graph.build import GRAPH_VERSION, compile_graph
 from app.ai.graph.deps import GraphDeps, to_configurable
+from app.ai.observability import run_metadata
 from app.ai.graph.state import ComplaintState, build_serializer, initial_state
 from app.ai.schemas import Coords, MediaRef
 from app.db.base import utcnow
@@ -463,7 +464,11 @@ async def run_complaint(
         complaint = session.query(Complaint).filter(Complaint.id == complaint_id).one()
         state = _state_for(complaint)
         deps = deps or build_deps(session_factory, complaint=complaint)
-        config = to_configurable(deps, thread_id=complaint_id)
+        config = to_configurable(
+            deps, thread_id=complaint_id,
+            metadata=run_metadata(complaint),
+            tags=[f"graph:{GRAPH_VERSION}"],
+        )
 
         started = time.monotonic()
         try:

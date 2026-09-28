@@ -63,9 +63,22 @@ class GraphDeps:
         return value
 
 
-def to_configurable(deps: GraphDeps, thread_id: str) -> RunnableConfig:
-    """Build the config a node expects. `thread_id` keys the checkpoint."""
-    return {"configurable": {"thread_id": thread_id, CONFIG_KEY: deps}}
+def to_configurable(deps: GraphDeps, thread_id: str,
+                    metadata: dict | None = None,
+                    tags: list[str] | None = None) -> RunnableConfig:
+    """Build the config a node expects. `thread_id` keys the checkpoint.
+
+    `metadata` and `tags` are what make a LangSmith trace filterable — by category
+    or pipeline version when hunting a regression. They are built by
+    app.ai.observability.run_metadata, which decides what may leave the building;
+    nothing here should add a field without reading that docstring first.
+    """
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id, CONFIG_KEY: deps}}
+    if metadata:
+        config["metadata"] = metadata
+    if tags:
+        config["tags"] = tags
+    return config
 
 
 def deps_from_config(config: RunnableConfig) -> GraphDeps:

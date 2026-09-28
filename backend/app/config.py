@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     # Empty by default and no rates are ever assumed: an invented price is the
     # number most likely to be lifted into a README and quoted at somebody.
     eval_cost_rates_file: str = ""
+    # LangSmith tracing. Off by default, and ignored without a key: a flag with no
+    # key would make every call attempt a trace and fail. The trace carries
+    # internal ids and AI outputs only -- see app/ai/observability.py on what is
+    # deliberately left out.
+    langsmith_tracing: bool = False
+    langsmith_api_key: str = ""
+    langsmith_project: str = "civicai"
 
     # ── Storage ───────────────────────────────────────────────
     upload_dir: str = "./uploads"

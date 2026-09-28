@@ -514,3 +514,27 @@ async def test_investigation_stops_after_three_turns(env):
     steps = [s.node for s in session.query(AgentStep).order_by(AgentStep.seq)]
     assert steps.count("investigate") == 3
     assert session.query(Complaint).one().status == "assigned"
+
+
+async def test_the_run_config_carries_filterable_metadata_and_no_citizen_data(env, monkeypatch):
+    """LangSmith is only useful if a regression can be filtered to a category or a
+    pipeline version — and only safe if the complaint text never goes with it."""
+    session, complaint = env
+    captured = {}
+
+    real = runner_module.to_configurable
+
+    def capture(deps, thread_id, metadata=None, tags=None):
+        captured["metadata"] = metadata
+        captured["tags"] = tags
+        return real(deps, thread_id, metadata, tags)
+
+    monkeypatch.setattr(runner_module, "to_configurable", capture)
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    assert captured["metadata"]["complaint_id"] == complaint.id
+    assert any("graph:" in t for t in captured["tags"])
+    flat = str(captured["metadata"])
+    assert complaint.citizen_email not in flat
+    assert complaint.description not in flat
+    assert complaint.tracking_id not in flat, "the tracking id is a read credential"

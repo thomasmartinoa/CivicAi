@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from rank_bm25 import BM25Okapi
 
 from app.ai.rag.chunking import Chunk
+from app.ai.observability import traced
 from app.ai.rag.store import FaissStore
 
 _TOKEN = re.compile(r"[a-z0-9]+")
@@ -96,6 +97,7 @@ class HybridRetriever:
         self._dense = dense
         self._sparse = sparse
 
+    @traced("rag.hybrid_search", run_type="retriever")
     def search(self, query: str, *, k: int = 5, fetch_k: int = 50, filters: dict | None = None) -> list[Hit]:
         dense = self._dense.search(query, k=fetch_k, fetch_k=fetch_k, filters=filters)
         sparse = self._sparse.search(query, k=fetch_k, fetch_k=fetch_k, filters=filters)

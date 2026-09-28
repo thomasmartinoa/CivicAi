@@ -23,6 +23,7 @@ import faiss
 import numpy as np
 from langchain_core.runnables import Runnable, RunnableLambda
 
+from app.ai.observability import traced
 from app.ai.rag.embeddings import EMBEDDING_DIM, Embedder
 
 
@@ -51,6 +52,7 @@ class SemanticCache:
         faiss.normalize_L2(vector)
         return vector
 
+    @traced("cache.lookup")
     def get(self, text: str) -> Any | None:
         if not self._entries:
             self.misses += 1
