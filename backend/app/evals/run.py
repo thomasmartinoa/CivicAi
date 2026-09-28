@@ -50,7 +50,15 @@ def _key(config_label: str, item_id: str) -> str:
 
 
 def load_log(path: Path) -> dict[str, Prediction]:
-    """Predictions from earlier runs, by (config, item). Missing file is empty."""
+    """Reusable predictions from earlier runs, by (config, item).
+
+    **Errored predictions are deliberately excluded.** The log exists so a
+    two-hour sweep survives an interruption, but a 503 "high demand" or a quota
+    429 is not an answer — reusing it would bake a transient outage into the
+    dataset permanently and the report would blame the model for the weather. The
+    rows are still written and still readable; they are just not treated as
+    results. A resumed run retries exactly those items.
+    """
     if not path.exists():
         return {}
     found: dict[str, Prediction] = {}
@@ -59,6 +67,8 @@ def load_log(path: Path) -> dict[str, Prediction]:
             continue
         row = json.loads(line)
         payload = row["prediction"]
+        if payload.get("error"):
+            continue
         found[_key(row["config"], row["item"])] = Prediction(
             valid=payload["valid"],
             category=Category(payload["category"]) if payload["category"] else None,

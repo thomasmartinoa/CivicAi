@@ -299,3 +299,40 @@ def test_the_report_discloses_a_model_tier_override(tmp_path, stub):
     assert "assess_risk" in text
     assert "gemini-3.5-flash-lite" in text
     assert "override" in text.lower()
+
+
+def test_resume_retries_items_that_errored_rather_than_caching_the_failure():
+    """The log exists so a two-hour sweep survives an interruption. But a 503 from
+    the provider, or a quota error, is not an answer — caching it would bake a
+    transient outage into the dataset permanently and the report would blame the
+    model for the weather."""
+    from app.evals.run import load_log
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as directory:
+        log = Path(directory) / "log.jsonl"
+        append_log(log, config="full", item_id="good", dataset="abc",
+                   prediction=Prediction(valid=True, category=Category.ROADS, latency_ms=10))
+        append_log(log, config="full", item_id="bad", dataset="abc",
+                   prediction=Prediction(error="validate: 503 UNAVAILABLE", latency_ms=48000))
+
+        reusable = load_log(log)
+        assert "full::good" in reusable
+        assert "full::bad" not in reusable, "an errored prediction must not be reused"
+
+
+def test_the_log_still_records_the_failure_for_inspection():
+    """Not reusing it is not the same as not writing it: the log is also the record
+    of what went wrong during a long run."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as directory:
+        log = Path(directory) / "log.jsonl"
+        append_log(log, config="full", item_id="bad", dataset="abc",
+                   prediction=Prediction(error="validate: 503", latency_ms=1))
+        rows = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+        assert rows[0]["prediction"]["error"] == "validate: 503"
