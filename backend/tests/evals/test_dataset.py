@@ -155,3 +155,30 @@ def test_the_file_is_one_object_per_line_and_readable_by_hand():
     for line in GOLDEN_V1.read_text(encoding="utf-8").splitlines():
         if line.strip():
             assert isinstance(json.loads(line), dict)
+
+
+def test_every_duplicate_item_names_the_group_it_belongs_to():
+    """The clustering eval expects exactly the items sharing a group to be
+    grouped. A duplicate with no group would be a silent distractor."""
+    for item in load_golden():
+        if "duplicate" in item.tags:
+            assert item.cluster_group, item.id
+
+
+def test_only_duplicates_carry_a_cluster_group():
+    for item in load_golden():
+        if item.cluster_group:
+            assert "duplicate" in item.tags, item.id
+
+
+def test_each_cluster_group_has_at_least_the_minimum_cluster_size():
+    """A group of two cannot be found by a detector whose min_size is three, so
+    the eval would measure the dataset rather than the detector."""
+    from collections import Counter
+
+    from app.config import settings
+
+    sizes = Counter(i.cluster_group for i in load_golden() if i.cluster_group)
+    assert sizes, "no cluster groups in the dataset"
+    for group, size in sizes.items():
+        assert size >= settings.cluster_min_size, f"{group} has only {size} items"

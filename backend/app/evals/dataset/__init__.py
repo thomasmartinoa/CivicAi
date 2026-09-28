@@ -47,6 +47,10 @@ class GoldenItem:
     expected_priority: int | None = None
     tags: tuple[str, ...] = ()
     adjudication: str | None = None
+    cluster_group: str | None = None
+    """Items sharing a group describe the same problem in the same place, and the
+    clustering eval expects exactly those to be grouped together. Explicit rather
+    than derived from the id, so the expectation cannot drift from the data."""
 
     @property
     def canonical(self) -> str:
@@ -75,6 +79,7 @@ def _item_from(row: dict, *, where: str) -> GoldenItem:
         expected_priority=row.get("expected_priority"),
         tags=tuple(row.get("tags", ())),
         adjudication=row.get("adjudication"),
+        cluster_group=row.get("cluster_group"),
     )
 
 
