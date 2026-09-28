@@ -88,6 +88,34 @@ def append_log(path: Path, *, config: str, item_id: str, dataset: str,
         handle.flush()
 
 
+def force_flash_tier() -> dict[str, tuple[str, str]]:
+    """Move every strong-tier task the eval uses onto the flash tier.
+
+    The free tier allows 20 strong-model requests per day and one three-column
+    sweep needs about five times that, so without this the `full` column cannot be
+    measured at all on a free key.
+
+    This is a real trade, not a workaround: holding the model constant across the
+    three columns is *better* experimental design for the comparison they exist to
+    make, but it means the risk numbers no longer describe the model production
+    actually uses for assess_risk. It is only acceptable because the return value
+    lands in the report's provenance, where a reader cannot miss it.
+
+    Mutating TASK_MODEL is the documented way to do this — see the note on that
+    dict in app/ai/llm.py, which exists for exactly this case.
+    """
+    from app.ai.llm import TASK_MODEL, Task
+
+    changed: dict[str, tuple[str, str]] = {}
+    for task in (Task.ASSESS_RISK, Task.INVESTIGATE):
+        was = TASK_MODEL[task]
+        if was == settings.gemini_model:
+            continue
+        TASK_MODEL[task] = settings.gemini_model
+        changed[task.value] = (was, settings.gemini_model)
+    return changed
+
+
 def take_slice(items: list[GoldenItem], limit: int | None) -> list[GoldenItem]:
     """A deterministic slice that spans the dataset.
 
@@ -237,7 +265,9 @@ def _per_tag(scored: list[tuple[GoldenItem, Prediction]]) -> dict[str, float | N
 
 
 def run(*, suite: str, config_labels: list[str], limit: int | None, out_dir: Path,
-        log_path: Path, resume: bool, write_db: bool) -> tuple[Path, list[ConfigurationSummary], str]:
+        log_path: Path, resume: bool, write_db: bool,
+        flash_only: bool = False) -> tuple[Path, list[ConfigurationSummary], str]:
+    tier_override = force_flash_tier() if flash_only else {}
     items = take_slice(load_golden(), limit)
     digest = dataset_hash(items)
     rates = load_cost_rates(settings.eval_cost_rates_path)
@@ -269,6 +299,7 @@ def run(*, suite: str, config_labels: list[str], limit: int | None, out_dir: Pat
             _record(suite, label, digest, summaries[-1])
 
     provenance = _provenance(digest, rates)
+    provenance["model_tier_override"] = tier_override
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path = out_dir / f"{datetime.now(timezone.utc):%Y-%m-%d}.md"
     report_path.write_text(render_report(summaries, provenance=provenance), encoding="utf-8")
@@ -290,6 +321,7 @@ def _provenance(digest: str, rates) -> dict:
         "requests_per_second": settings.llm_requests_per_second,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "cost_rates_source": rates.source if rates else None,
+        "model_tier_override": {},
     }
 
 
@@ -320,6 +352,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resume", action="store_true",
                         help="reuse predictions already in the log instead of calling the model")
     parser.add_argument("--no-db", action="store_true", help="do not write EvalRun rows")
+    parser.add_argument("--flash-only", action="store_true",
+                        help="run every chain on the flash tier so a free key can "
+                             "finish a sweep; disclosed in the report")
     parser.add_argument("--gate", action="store_true",
                         help="exit nonzero if the full configuration's macro-F1 regressed")
     args = parser.parse_args(argv)
@@ -328,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
     labels = list(CONFIGURATIONS) if args.config == "all" else [args.config]
     path, summaries, digest = run(suite=args.suite, config_labels=labels, limit=args.limit,
                                   out_dir=args.out, log_path=args.log, resume=args.resume,
-                                  write_db=not args.no_db)
+                                  write_db=not args.no_db, flash_only=args.flash_only)
     print(f"\nreport: {path}")
 
     if not args.gate:

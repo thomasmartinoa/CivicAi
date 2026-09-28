@@ -244,3 +244,58 @@ def test_a_limited_slice_is_spread_across_the_dataset_not_the_first_ids():
     assert any(not i.expected_valid for i in twenty), "junk must be represented"
     assert take_slice(items, None) == sorted(items, key=lambda i: i.id)
     assert len(take_slice(items, 1000)) == len(items)
+
+
+# ── running the sweep on a free tier ────────────────────────────────────────
+
+
+def test_flash_only_moves_the_strong_tier_tasks_and_says_what_it_changed():
+    """The free tier allows 20 strong-model requests a day, which is five times
+    less than one three-column sweep needs. Holding every column on the flash tier
+    keeps the columns comparable with each other — the point of the exercise — at
+    the cost of not describing production's strong-tier risk model. That trade is
+    only acceptable because the report states it."""
+    from app.ai.llm import TASK_MODEL, Task
+    from app.config import settings
+    from app.evals.run import force_flash_tier
+
+    before = dict(TASK_MODEL)
+    try:
+        changed = force_flash_tier()
+        assert changed, "nothing was overridden"
+        assert TASK_MODEL[Task.ASSESS_RISK] == settings.gemini_model
+        assert Task.ASSESS_RISK.value in changed
+        assert changed[Task.ASSESS_RISK.value] == (
+            before[Task.ASSESS_RISK], settings.gemini_model
+        ), "the override records what it moved, from and to"
+    finally:
+        TASK_MODEL.clear()
+        TASK_MODEL.update(before)
+
+
+def test_flash_only_leaves_tasks_already_on_the_flash_tier_alone():
+    from app.ai.llm import TASK_MODEL, Task
+    from app.evals.run import force_flash_tier
+
+    before = dict(TASK_MODEL)
+    try:
+        changed = force_flash_tier()
+        assert Task.CLASSIFY.value not in changed, "classify was already flash"
+    finally:
+        TASK_MODEL.clear()
+        TASK_MODEL.update(before)
+
+
+def test_the_report_discloses_a_model_tier_override(tmp_path, stub):
+    """A risk number measured on a different model than production ships must not
+    sit in a table looking like production's."""
+    from app.evals.report import render_report
+
+    from app.evals.run import _provenance
+
+    provenance = _provenance("abc123", None)
+    provenance["model_tier_override"] = {"assess_risk": ("gemini-3.5-flash", "gemini-3.5-flash-lite")}
+    text = render_report([], provenance=provenance)
+    assert "assess_risk" in text
+    assert "gemini-3.5-flash-lite" in text
+    assert "override" in text.lower()

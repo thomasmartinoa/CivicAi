@@ -113,6 +113,15 @@ def _per_tag_table(summaries: list[ConfigurationSummary]) -> str:
     return _table(headers, rows)
 
 
+def _override_rows(provenance: dict) -> list[list[str]]:
+    """A model the eval did not actually use in production is a disclosure, not a
+    footnote: a risk number measured on the flash tier must not sit in a table
+    looking like the strong tier production ships."""
+    override = provenance.get("model_tier_override") or {}
+    return [[f"Model tier override — {task}", f"{was} -> {now} (not production's tier)"]
+            for task, (was, now) in sorted(override.items())]
+
+
 def render_report(summaries: list[ConfigurationSummary], *, provenance: dict) -> str:
     """The whole document, as markdown."""
     prompt_versions = " · ".join(f"{name} {version}"
@@ -161,6 +170,7 @@ def render_report(summaries: list[ConfigurationSummary], *, provenance: dict) ->
             ["Prompt versions", prompt_versions],
             ["Models", models],
             ["Requests per second", str(provenance["requests_per_second"])],
+            *_override_rows(provenance),
         ]),
         "",
     ]
