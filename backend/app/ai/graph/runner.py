@@ -287,6 +287,8 @@ def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
         complaint.state = location.state or complaint.state
     if state["evidence"]:
         complaint.evidence = [chunk.model_dump() for chunk in state["evidence"]]
+    if state["routing"]:
+        complaint.routing_justification = state["routing"].justification
 
     if state["work_order"] and status == "assigned":
         draft = state["work_order"]

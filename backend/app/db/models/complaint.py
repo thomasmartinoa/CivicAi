@@ -54,6 +54,13 @@ class Complaint(Base):
     # ten complaints -- and v1's alternative was `notes LIKE '%[CLUSTER]%'`.
     cluster_id: Mapped[str | None] = mapped_column(String(36), index=True)
 
+    # The prose route_node writes to justify the department and contractor it
+    # chose, with [n] citations into `evidence`. Stored because it is what an
+    # officer or citizen reads to check the decision, and what the Phase 3 rubric
+    # judge scores -- before this it reached state and was discarded, leaving only
+    # the one-line AgentStep summary.
+    routing_justification: Mapped[str | None] = mapped_column(Text)
+
     # ── citizen feedback ──────────────────────────────────────
     satisfaction_rating: Mapped[int | None] = mapped_column(Integer)
     satisfaction_comment: Mapped[str | None] = mapped_column(Text)

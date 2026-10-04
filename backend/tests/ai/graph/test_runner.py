@@ -538,3 +538,27 @@ async def test_the_run_config_carries_filterable_metadata_and_no_citizen_data(en
     assert complaint.citizen_email not in flat
     assert complaint.description not in flat
     assert complaint.tracking_id not in flat, "the tracking id is a read credential"
+
+
+async def test_the_routing_justification_is_persisted(env):
+    """The prose route_node writes to explain its choice was reaching state and
+    then being thrown away — only the one-line step summary survived. Phase 3's
+    rubric judge exists to score exactly this text, so without it the judge had
+    no real artefact to run on at all."""
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.routing_justification, "the justification must survive the run"
+    assert "Public Works" in stored.routing_justification or \
+           "General Administration" in stored.routing_justification
+
+
+async def test_a_run_with_no_routing_leaves_the_justification_alone(env):
+    """A rejected complaint never routes, so there is nothing to explain."""
+    session, complaint = env
+    await _run(session, complaint, _deps(valid=False, session_factory=lambda: session))
+
+    session.expire_all()
+    assert session.query(Complaint).one().routing_justification is None
