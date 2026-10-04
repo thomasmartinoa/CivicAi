@@ -195,7 +195,7 @@ correctly (slice accuracy 1.00). So the pipeline is not confused by vagueness; i
 refuses it. Whether "it is broken near the temple" should be actionable is a product
 decision, not a model defect — but it should be a decision, not an accident.
 
-### 4.2b By slice
+### Accuracy by slice
 
 | slice | `keyword` | `llm_only` | `full` |
 |---|---|---|---|
@@ -359,8 +359,10 @@ Three rules make it worth having, all in `app/evals/gate.py`:
 - **A baseline belongs to a dataset.** It stores the `dataset_hash` it was measured
   on, and comparing across datasets raises.
 
-**No baseline is committed yet.** The first one should come from a full three-column
-sweep somebody is willing to defend, which is blocked on §5.
+The baseline is committed: `app/evals/baselines/core.json` records **full macro-F1
+0.93** against the dataset hash it was measured on, from the 2026-10-04 sweep, with
+the flash-tier caveat written onto the row. Verified in both directions — the gate
+passes at 0.92 and fails at 0.91 and below.
 
 ---
 
@@ -423,14 +425,23 @@ cd backend
 # Layer 1: the deterministic suite. No key, no network, ~7s.
 .venv/bin/python -m pytest -q
 
-# Layer 2: the golden set. Needs GEMINI_API_KEY; see §5 on quota.
-.venv/bin/python -m app.evals.run --config keyword                  # free, instant
-.venv/bin/python -m app.evals.run --config all --limit 20 --resume  # ~20 min
-.venv/bin/python -m app.evals.run --config all --gate               # CI form
+# Layer 2: the golden set. Needs GEMINI_API_KEY.
+.venv/bin/python -m app.evals.run --config keyword                     # free, instant
+.venv/bin/python -m app.evals.run --config all --flash-only --resume   # ~50 min
+.venv/bin/python -m app.evals.run --config all --flash-only --resume --gate
 ```
 
+**Set `LLM_REQUESTS_PER_SECOND` to 0.2 before a sweep.** The free tier allows 15
+generate requests per minute per model
+(`GenerateRequestsPerMinutePerProjectPerModel-FreeTier`) — that, not the daily cap,
+is the limit a sweep actually hits. At 0.5 a 100-item run took 429s inside the first
+minute; at 0.2 the same run finished 300 predictions with none. `--flash-only` keeps
+everything on the flash tier, because the strong tier `assess_risk` normally uses is
+capped at 20 requests a *day*, and the report discloses the override.
+
 `--resume` reuses predictions already in `data/eval-runs/predictions.jsonl` instead
-of calling the model. It exists because a full sweep is over two hours of wall clock
+of calling the model, and retries anything that errored rather than caching the
+failure — a 503 or a 429 is not an answer. It exists because a full sweep is over two hours of wall clock
 on the free tier, most of it waiting, and losing that to one 429 would make this a
 tool nobody runs twice. Re-scoring a finished sweep costs nothing, which is how the
 aggregation bug in §4.2 was found and fixed without paying for the run again.
