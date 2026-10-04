@@ -15,38 +15,122 @@ rate card is revised annually to track material cost inflation.
 
 ## Unit rates by item
 
-| Item | Category | Unit | Rate |
-|---|---|---|---|
-| Hot-mix asphalt patching | ROADS | per m² | ₹450 |
-| Cold-mix asphalt (emergency) | ROADS | per m² | ₹600 |
-| Aggregate base material | ROADS | per m³ | ₹1,800 |
-| Precast concrete kerb stone | ROADS | per metre | ₹350 |
-| Thermoplastic road marking paint | ROADS | per metre | ₹120 |
-| Excavation and trench reinstatement | CONSTRUCTION | per m³ | ₹900 |
-| Barricading and warning signage | CONSTRUCTION | per set | ₹2,500 |
-| LED street luminaire (with fitting) | ELECTRICITY | per unit | ₹3,200 |
-| Concrete street lighting pole | ELECTRICITY | per unit | ₹8,500 |
-| Armoured underground cable | ELECTRICITY | per metre | ₹280 |
-| Distribution transformer (25 kVA) | ELECTRICITY | per unit | ₹65,000 |
-| PVC water supply pipe (110mm) | WATER | per metre | ₹320 |
-| HDPE water supply pipe (63mm) | WATER | per metre | ₹180 |
-| Ductile iron trunk main pipe | WATER | per metre | ₹1,400 |
-| Water meter (residential) | WATER | per unit | ₹1,200 |
-| Public bin (120 litre) | SANITATION | per unit | ₹2,800 |
-| Compactor truck trip | SANITATION | per trip | ₹1,500 |
-| Cast-iron manhole cover | SEWAGE | per unit | ₹3,500 |
-| RCC sewer pipe (300mm) | SEWAGE | per metre | ₹950 |
-| Jetting machine hire | SEWAGE | per hour | ₹1,800 |
-| Sandbag (filled) | FLOODING | per unit | ₹40 |
-| Submersible dewatering pump hire | FLOODING | per day | ₹2,200 |
-| Desilting machinery hire | FLOODING | per day | ₹6,500 |
-| Playground equipment repair kit | PUBLIC_SPACES | per unit | ₹4,000 |
-| Chain-link fencing | PUBLIC_SPACES | per metre | ₹250 |
-| Classroom furniture set (desk + bench) | EDUCATION | per set | ₹3,800 |
-| Roofing sheet (galvanised) | EDUCATION | per m² | ₹550 |
-| Larvicide treatment | HEALTH | per application | ₹800 |
-| Fire extinguisher (6kg, refilled) | FIRE_HAZARD | per unit | ₹1,600 |
-| Animal capture and transport | STRAY_ANIMALS | per callout | ₹1,000 |
+Indicative unit rates, grouped by the category of complaint they are used
+to price. A work order should cite the specific lines it used.
+
+### ROADS unit rates
+
+Unit rates for ROADS work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| Hot-mix asphalt patching | per m² | ₹450 |
+| Cold-mix asphalt (emergency) | per m² | ₹600 |
+| Aggregate base material | per m³ | ₹1,800 |
+| Precast concrete kerb stone | per metre | ₹350 |
+| Thermoplastic road marking paint | per metre | ₹120 |
+
+### CONSTRUCTION unit rates
+
+Unit rates for CONSTRUCTION work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| Excavation and trench reinstatement | per m³ | ₹900 |
+| Barricading and warning signage | per set | ₹2,500 |
+
+### ELECTRICITY unit rates
+
+Unit rates for ELECTRICITY work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| LED street luminaire (with fitting) | per unit | ₹3,200 |
+| Concrete street lighting pole | per unit | ₹8,500 |
+| Armoured underground cable | per metre | ₹280 |
+| Distribution transformer (25 kVA) | per unit | ₹65,000 |
+
+### WATER unit rates
+
+Unit rates for WATER work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| PVC water supply pipe (110mm) | per metre | ₹320 |
+| HDPE water supply pipe (63mm) | per metre | ₹180 |
+| Ductile iron trunk main pipe | per metre | ₹1,400 |
+| Water meter (residential) | per unit | ₹1,200 |
+
+### SANITATION unit rates
+
+Unit rates for SANITATION work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| Public bin (120 litre) | per unit | ₹2,800 |
+| Compactor truck trip | per trip | ₹1,500 |
+
+### SEWAGE unit rates
+
+Unit rates for SEWAGE work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| Cast-iron manhole cover | per unit | ₹3,500 |
+| RCC sewer pipe (300mm) | per metre | ₹950 |
+| Jetting machine hire | per hour | ₹1,800 |
+
+### FLOODING unit rates
+
+Unit rates for FLOODING work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| Sandbag (filled) | per unit | ₹40 |
+| Submersible dewatering pump hire | per day | ₹2,200 |
+| Desilting machinery hire | per day | ₹6,500 |
+
+### PUBLIC_SPACES unit rates
+
+Unit rates for PUBLIC_SPACES work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| Playground equipment repair kit | per unit | ₹4,000 |
+| Chain-link fencing | per metre | ₹250 |
+
+### EDUCATION unit rates
+
+Unit rates for EDUCATION work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| Classroom furniture set (desk + bench) | per set | ₹3,800 |
+| Roofing sheet (galvanised) | per m² | ₹550 |
+
+### HEALTH unit rates
+
+Unit rates for HEALTH work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| Larvicide treatment | per application | ₹800 |
+
+### FIRE_HAZARD unit rates
+
+Unit rates for FIRE_HAZARD work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| Fire extinguisher (6kg, refilled) | per unit | ₹1,600 |
+
+### STRAY_ANIMALS unit rates
+
+Unit rates for STRAY_ANIMALS work.
+
+| Item | Unit | Rate |
+|---|---|---|
+| Animal capture and transport | per callout | ₹1,000 |
 
 ## Labour and equipment rates
 

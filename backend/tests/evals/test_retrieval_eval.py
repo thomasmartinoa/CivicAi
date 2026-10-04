@@ -112,3 +112,36 @@ def test_no_case_matches_on_a_section_header():
             f"{case.name}: {case.must_contain!r} is a section header, so it is not in "
             "any chunk's text — match on body text instead"
         )
+
+
+def test_recall_carries_the_number_of_cases_that_actually_ran():
+    """A re-ingest can exhaust the per-minute embedding quota and leave most cases
+    unrun. "1.00" over one case reads exactly like 1.00 over seven unless the n
+    travels with it — which is how a real measurement got misreported as 7/7."""
+    found = RecallCase(name="found", query="q", filters={"doc_type": "rate_card"},
+                       must_contain="trench")
+    broken = RecallCase(name="broken", query="q", filters={"doc_type": "rate_card"},
+                        must_contain="x")
+
+    class Mixed:
+        def __init__(self):
+            self.calls = 0
+
+        def search(self, query, *, k, fetch_k, filters):
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("429 RESOURCE_EXHAUSTED")
+            return [_hit("Excavation and trench reinstatement", "rate_card.md")]
+
+    report = evaluate_retrieval(Mixed(), cases=[found, broken])
+    assert report.recall_at_k == 1.0
+    assert report.scored == 1
+    assert report.errored == 1
+    assert "1/1 cases found" in report.summary
+    assert "1 could not run" in report.summary
+
+
+def test_a_fully_errored_report_says_not_measured():
+    report = evaluate_retrieval(FakeRetriever(raises=RuntimeError("429")), cases=CASES[:2])
+    assert report.recall_at_k is None
+    assert "not measured" in report.summary

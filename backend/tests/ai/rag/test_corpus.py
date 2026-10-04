@@ -157,3 +157,44 @@ def test_the_rate_card_states_a_rule_for_grouped_work():
     section = text.split("## Grouped work at multiple sites", 1)[1].split("\n## ", 1)[0]
     assert re.search(r"\b\d{1,3}\s?%", section), "the grouped-work rule states no percentage"
     assert "mobilis" in section.lower(), "the rule must explain what the saving is"
+
+
+def test_the_rate_card_table_is_split_by_category():
+    """The fix for a measured retrieval miss lives in this document's shape, so it
+    needs guarding here.
+
+    One table spanning twelve categories chunked into a single 1,780-character
+    block, so a CONSTRUCTION rate query met a chunk where "CONSTRUCTION" was two
+    rows out of twenty-five and lost to the card's prose sections, which discuss
+    rates in the query's own words. recall@3 for that query was 0.00 — see
+    docs/07 §4.4. A subsection per category gives each one its own chunk, and the
+    header-aware chunker needed no changes.
+    """
+    from app.ai.rag.chunking import chunk_markdown
+
+    text = next(t for p, t in load_corpus() if p.name == "rate_card.md")
+    chunks = chunk_markdown(text, "rate_card.md")
+
+    for category in Category:
+        owning = [c for c in chunks
+                  if any(category.value in h for h in c.metadata.get("headers", []))]
+        assert owning, f"{category.value} has no rate-card chunk of its own"
+        assert len(owning) == 1, f"{category.value} rates are split across chunks"
+        others = [o.value for o in Category if o is not category and o.value in owning[0].text]
+        assert not others, (
+            f"the {category.value} chunk also contains {others}, which is the dilution "
+            "this structure exists to avoid"
+        )
+
+
+def test_every_rate_card_line_survived_the_restructuring():
+    """Splitting the table must not have dropped or changed a rate."""
+    text = next(t for p, t in load_corpus() if p.name == "rate_card.md")
+    for item, rate in (("Excavation and trench reinstatement", "₹900"),
+                       ("Hot-mix asphalt patching", "₹450"),
+                       ("Distribution transformer (25 kVA)", "₹65,000"),
+                       ("Animal capture and transport", "₹1,000"),
+                       ("Larvicide treatment", "₹800")):
+        line = next((l for l in text.splitlines() if item in l), None)
+        assert line is not None, f"{item} is missing from the rate card"
+        assert rate in line, f"{item} no longer costs {rate}: {line}"

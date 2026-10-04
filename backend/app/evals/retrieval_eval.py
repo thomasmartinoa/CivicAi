@@ -123,9 +123,28 @@ class RecallReport:
     results: list[CaseResult]
 
     @property
+    def scored(self) -> int:
+        """How many cases actually ran. The n has to travel with the recall: a
+        re-ingest can exhaust the per-minute embedding quota and leave most cases
+        unrun, and "1.00" over one case reads exactly like 1.00 over seven."""
+        return sum(1 for r in self.results if r.error is None)
+
+    @property
+    def errored(self) -> int:
+        return sum(1 for r in self.results if r.error is not None)
+
+    @property
     def recall_at_k(self) -> float | None:
-        scored = [r for r in self.results if r.error is None]
-        return sum(1 for r in scored if r.found) / len(scored) if scored else None
+        found = sum(1 for r in self.results if r.error is None and r.found)
+        return found / self.scored if self.scored else None
+
+    @property
+    def summary(self) -> str:
+        if self.recall_at_k is None:
+            return f"recall@k: not measured — all {len(self.results)} cases errored"
+        line = (f"recall@k: {self.recall_at_k:.2f} "
+                f"({self.scored - len(self.misses)}/{self.scored} cases found)")
+        return line + (f", {self.errored} could not run" if self.errored else "")
 
     @property
     def misses(self) -> list[CaseResult]:
