@@ -1,0 +1,6 @@
+{
+  "macro_f1": 0.93,
+  "dataset_hash": "2521c86d94a7b86c7ef32a45918bb32de78762dfc396ffc7379fff7f5c30fb34",
+  "git_sha": "f385089b66faba88cfea57776b332c4a7a6cfdf9",
+  "note": "First complete three-column sweep, 2026-10-04: full macro-F1 0.93 over n=70 classified items. Measured with --flash-only, so assess_risk ran on the flash tier rather than the strong tier production uses; the classification metrics this gate watches are unaffected, since classify is on the flash tier either way."
+}
