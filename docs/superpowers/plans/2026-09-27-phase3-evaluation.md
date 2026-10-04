@@ -472,3 +472,58 @@ Also record here what the eval found that the phases assumed: whether retrieval 
 **Deliberately not in this phase:** fixing what the eval finds. A regression the gate catches and a category the confusion matrix exposes are Phase 3 *outputs*; acting on them is the next phase's input. Resist the urge to tune a prompt mid-measurement — the first honest number is the only baseline this project will ever get.
 
 **Next:** Phase 4 — the officer ReAct agent, its tools and the SSE endpoint, plus the officer authentication the email-draft flow has been waiting for since Phase 2c. Phase 3's judges become that agent's regression tests.
+
+---
+
+## Carried forward from Phase 3 (recorded 2026-10-04)
+
+Nine of the ten tasks landed; the suite is at 630 tests, no network, no key. The
+tenth — judge validation — is built but unvalidated, because the hand labels are
+deliberately the author's work and have not been written yet.
+
+**What the phase was for, answered.** Retrieval earns its place: full beats the
+ungrounded column by 5 points of classification accuracy and 12 of macro-F1
+(0.81 → 0.93). The shape of that gap is the finding: macro-F1 averages over classes,
+so retrieval is helping most on the rare categories, which is what a municipal
+classifier needs. `non_english` goes 0.17 → 1.00 against v1 and `ambiguous`
+0.32 → 0.82.
+
+**The defect this phase found, and the one thing worth doing next.**
+`validate` rejects 18 of 88 real complaints — invalid-complaint recall 1.00 bought
+with precision 0.40. Three of the 18 are the documented 10-character guard firing on
+labels that were written carelessly (`"pothole"`, `"no water"`, `"dog bite"`); the
+other fifteen include twenty gas cylinders in a residential building and a child's
+dog bite needing stitches. Diagnosis: `VALIDATE_V1` says "be strict about subject
+matter" and never names the twelve categories, so the model applies a narrower idea
+of "infrastructure" than `classify` works with — the two nodes disagree about the
+body's own scope. `VALIDATE_V2` names them and states the asymmetry (rejecting a real
+complaint costs more than passing a thin one). Measuring v2 against v1's 0.40 is the
+immediate next step; v1 stays registered as the before-number.
+
+**Also still open**
+- **Risk grounding is not paying for itself**: 0.63 → 0.66 band accuracy, priority MAE
+  flat at ~9.6. Measured with `--flash-only`, so this does not describe the strong
+  tier production uses for `assess_risk` — re-measure with a paid key before
+  concluding anything, and note that 20 strong requests a day makes that impossible
+  on the free tier.
+- **`multi_problem` is the weakest slice at 0.67** for both LLM columns, and
+  retrieval does nothing for it. The adjudication notes say the most dangerous fault
+  wins; nothing in any prompt says so.
+- **One in six injection items still moves its risk band** (slice 0.83). Retrieval
+  improved it from 0.71, which is not a defence to rely on.
+- **The rate-card table is not retrievable per category** — recall@3 0.86 with the
+  one miss being a CONSTRUCTION rate query returning the card's prose sections. The
+  structural fix (chunk the table by category, or carry `category` per row) has a
+  before-number now.
+- **Three labels need the author's eye**: `amb-fw-1`, `amb-fw-5`, `amb-fw-11`, all
+  labelled FLOODING and all called WATER/SEWAGE/SANITATION by both configurations.
+  Two independent systems agreeing against a label is weak evidence the label is
+  wrong. Not relabelled, because moving a label to improve a score is how a golden
+  set stops being ground truth.
+- **Faithfulness is unmeasured.** It is the one Ragas metric with no deterministic
+  substitute, and it needs a judge — which needs the hand labels above.
+
+**Next:** Phase 4 — the officer ReAct agent, its tools and the SSE endpoint, plus the
+officer authentication the email-draft flow has waited for since Phase 2c. Fixing
+`validate` comes first, because it is a measured defect in the live path and the
+cheapest thing in this list to verify.
