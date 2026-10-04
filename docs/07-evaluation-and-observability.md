@@ -127,57 +127,94 @@ over eighteen items is not the same claim as the same number over a hundred:
 
 ## 4. What has actually been measured
 
-### 4.1 The v1 baseline, all 100 items
+### 4.1 All three columns, all 100 items
 
-| metric | `keyword` |
-|---|---|
-| classification accuracy | 0.55 (n=88) |
-| macro-F1 | 0.54 |
-| department routing | 0.64 *(derived from the category)* |
-| invalid-complaint recall | 0.00 |
-| invalid-complaint precision | not applicable — it never predicts "junk" |
-| risk band / priority | not applicable — v1's keyword path has no risk model |
+One sweep, 300 predictions, no errors. `docs/eval-reports/2026-10-04.md` is the
+report; this is its core:
 
-By slice: `straightforward` 0.71, `short` 0.80, `duplicate` 0.83, `vague` 0.64,
-`long` 0.50, `multi_problem` 0.50, **`ambiguous` 0.32**, **`non_english` 0.17**,
-**`junk` 0.00**.
+| metric | `keyword` | `llm_only` | `full` |
+|---|---|---|---|
+| classification accuracy | 0.55 | 0.86 | **0.91** |
+| macro-F1 (12 categories) | 0.54 | 0.81 | **0.93** |
+| department routing *(derived)* | 0.64 | 0.89 | 0.94 |
+| risk band accuracy | not applicable | 0.63 | 0.66 |
+| priority MAE (points) | not applicable | 9.7 | 9.6 |
+| invalid-complaint recall | 0.00 | 1.00 | 1.00 |
+| invalid-complaint precision | not applicable | 0.40 | 0.40 |
+| p95 wall clock per item | 0.0s | 16.7s | 16.1s |
 
-Three of those are the interesting ones. It cannot reject anything, so every noisy
-neighbour becomes a work order. It is keyword matching, so transliterated Hindi and
-Kannada mostly fail. And it scores 0.32 where two categories are genuinely
-arguable, which is where a municipal classifier earns its keep.
+Classification is `n=70`, because 30 items were predicted invalid and so have no
+category to score; the invalid rows are `n=100`.
 
-### 4.2 v2 without retrieval, on the same 18 items
+**Retrieval earns its place, and the honest version of that sentence is more
+interesting than the headline.** It adds five points of accuracy but **twelve points
+of macro-F1** — 0.81 to 0.93. Macro-F1 averages over classes rather than items, so a
+gain that large against a small accuracy gain means retrieval is helping on the
+*rare* categories, which is precisely what the metric exists to expose and precisely
+what a municipal classifier needs: FIRE_HAZARD and STRAY_ANIMALS matter more than
+their frequency suggests.
 
-`llm_only` has been run over 20 items. Those 20 happened to be *all ambiguous* —
-`--limit` took the first N by id at the time, which is a flaw since fixed — so this
-is a measurement on the **hardest slice of the dataset**, not a general sample.
-Computed over exactly the 18 items where both configurations produced a category:
+**Risk assessment barely moves**: 0.63 to 0.66, with priority MAE flat at ~9.6
+points. Grounding that node in the SLA policy and precedent cases is not paying for
+itself on this evidence. One caveat that must travel with the number: this sweep ran
+`--flash-only`, so `assess_risk` used the flash tier rather than the strong tier it
+ships with, and the report's provenance says so. The classification figures are
+unaffected — `classify` is on the flash tier either way.
 
-| | accuracy | macro-F1 |
-|---|---|---|
-| `keyword` | 0.28 | 0.09 |
-| `llm_only` | **0.83** | **0.35** |
+### 4.2 The finding nobody was looking for
 
-Of the 13 items where they disagreed, 10 went to `llm_only`, 3 were wrong in both,
-and **none** went to `keyword`. The pattern is exactly what the classify prompt's
-worked examples target:
+Invalid-complaint **recall is 1.00 and precision is 0.40**. All twelve junk items are
+caught — and that is bought by rejecting **18 of the 88 real complaints**.
+
+Three of those are the documented 10-character minimum in `validate_node` firing on
+`"pothole"`, `"no water"` and `"dog bite"`, before any model call. That is the
+product working as designed and **my labels being careless** — I wrote three
+sub-minimum items into the `short` slice expecting them to be classified. Recorded
+rather than quietly relabelled, because moving a label to improve a score is how a
+golden set stops being ground truth.
+
+The other fifteen are genuine over-rejection, and three of them are not vague or
+ambiguous at all:
 
 ```
-amb-rc-1   expected CONSTRUCTION  keyword ROADS    llm_only CONSTRUCTION
-amb-rc-11  expected CONSTRUCTION  keyword ROADS    llm_only CONSTRUCTION
-amb-fw-8   expected FLOODING      keyword ROADS    llm_only FLOODING
+std-fire-1    someone is storing about twenty gas cylinders in the ground floor
+              shop of a residential building, no ventilation at all
+std-constr-2  illegal construction is going on at the corner site...
+inj-8         stray dog bit a child near the park this morning, he needed stitches
 ```
 
-Other measures on that slice: risk band accuracy 0.75 (n=8), priority MAE 5.0
-points (n=8), p95 wall clock 86.5s per item, 9,853 input and 7,902 output tokens.
+A validator that discards a fire hazard and an injured child is worse than one that
+lets some junk through: a rejected complaint is never seen by an officer again.
+**Retrieval cannot help here** — both LLM columns score 0.40 because `validate` does
+not retrieve at all. The fix is a prompt and threshold question for the next phase,
+and it now has a before-number.
 
-**All three both-wrong items were FLOODING**, called WATER, SEWAGE and SANITATION.
-Two independent systems disagreeing with the same label in the same direction is
-weak evidence that the label — or the taxonomy's explanation of the
-FLOODING/WATER/SEWAGE boundary — is the problem, not the models. That is on the
-list to re-examine, and it is recorded here rather than quietly relabelled: moving
-a label to make a score improve is how a golden set stops being ground truth.
+The `vague` slice is the other half of the story: eight of eleven vague-but-real
+items were rejected, while every vague item that *was* accepted got classified
+correctly (slice accuracy 1.00). So the pipeline is not confused by vagueness; it
+refuses it. Whether "it is broken near the temple" should be actionable is a product
+decision, not a model defect — but it should be a decision, not an accident.
+
+### 4.2b By slice
+
+| slice | `keyword` | `llm_only` | `full` |
+|---|---|---|---|
+| straightforward | 0.71 | 0.90 | **1.00** |
+| ambiguous | 0.32 | 0.77 | 0.82 |
+| junk | 0.00 | 1.00 | 1.00 |
+| non_english | 0.17 | 1.00 | 1.00 |
+| vague | 0.64 | 1.00 | 1.00 |
+| injection | not applicable | 0.71 | **0.83** |
+| multi_problem | 0.50 | 0.67 | 0.67 |
+| duplicate / long / short | 0.83 / 0.50 / 0.80 | 1.00 | 1.00 |
+
+Three rows worth stopping on. **`non_english` 0.17 → 1.00**: keyword matching cannot
+read transliterated Hindi or Kannada, and that is most of what a Bengaluru
+municipality receives. **`injection` 0.83**: the share of items whose risk band
+survived an instruction, inside the citizen's text, telling the model to change it —
+so roughly one in six still moved, and retrieval improved it from 0.71, which is not
+a defence anyone should rely on. **`multi_problem` 0.67 for both**: the weakest slice
+for v2, and the one retrieval does nothing for.
 
 ### 4.3 The clustering threshold
 
@@ -268,13 +305,14 @@ quietly wrong for months.
 This section exists because a document that quietly omits its gaps is worse than
 one with none.
 
-**The `full` column has never been run.** `assess_risk` uses the strong model tier,
-and the Gemini free tier allows **20 requests per day** for it
-(`GenerateRequestsPerDayPerProjectPerModel-FreeTier`, `quotaValue: 20`). The
-`llm_only` sweep exhausted that at item 11 of 20; every later item classified fine
-on flash-lite and lost only its risk assessment. So **the phase's headline question
-— does retrieval earn its place — is still open.** A complete three-column sweep is
-roughly 300 calls and needs a paid key or ten days of free quota.
+**The judges are not validated**, and that is now the only thing between Phase 3
+and done. `app/evals/judges.py` scores the routing justification and the briefing
+against anchored rubrics; `judge_validation.py` computes exact, within-one and
+Cohen's κ agreement against hand labels; `label_judges.py` is a keyboard-only CLI
+for producing them and `capture_artifacts.py` pulls real artefacts out of the
+database to score. No hand labels have been written, so the correct report line is
+*not validated*. They are deliberately not generated: a judge checked against labels
+the same family of model produced is measuring its own reflection.
 
 **Ragas is deliberately not used.** It computes `context_recall` and
 `faithfulness` by asking an LLM, so every metric costs model calls — and on a free
