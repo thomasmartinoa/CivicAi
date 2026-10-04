@@ -1,87 +1,151 @@
 # CLAUDE.md
 
-> **⚠️ This file describes CivicAI v1, which was deleted in the Phase 0 rewrite.**
-> It is stale and should not be trusted for architecture, file paths, settings, or
-> API surface. See `docs/superpowers/specs/2026-09-02-civicai-v2-design.md` for the
-> current design and `docs/01-legacy-system-explained.md` for what v1 was.
-> A full rewrite of this file is scheduled for Phase 6.
+Guidance for Claude Code working in this repository. Everything below describes
+**v2**, the current system. v1 was deleted in Phase 0; `docs/01-legacy-system-explained.md`
+records what it was and why it was replaced, and is the only place v1 is described.
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## What this is
 
-## Project Overview
+An AI-driven municipal complaint pipeline. A citizen submits a report (text, photos,
+voice, GPS); a LangGraph graph validates it, classifies it into one of twelve
+categories, scores its risk, routes it to a department and contractor, drafts a work
+order with an SLA deadline, and notifies the citizen. Every AI decision cites the
+municipal documents it was grounded in.
 
-CivicAI is an AI-driven government infrastructure complaint resolution system. Citizens submit complaints (text, images, voice, GPS), which are processed through a 7-agent AI pipeline that validates, classifies, risk-assesses, routes to departments, and generates work orders with SLA tracking.
+The project is built in phases, each with a plan under `docs/superpowers/plans/` and
+a **"Carried forward"** section at the end recording what was deliberately deferred.
+**Read the carried-forward section of the most recent phase before starting work** —
+it is where the known defects live.
 
-## Architecture
-
-**Backend**: Python 3.14 + FastAPI + SQLAlchemy ORM + SQLite (dev) / PostgreSQL (prod)
-**Frontend**: React 18 + TypeScript + Vite + Tailwind CSS + React Query + Recharts + Leaflet
-**AI**: Google Gemini (gemini-2.5-flash-lite) with keyword-based fallback when API is unavailable
-
-### Multi-Agent Pipeline (`backend/app/agents/`)
-
-Complaints flow through 7 sequential agents via `ComplaintPipeline`:
-1. **IntakeAgent** - Media processing (speech-to-text, image analysis), reverse geocoding via Nominatim
-2. **ValidationAgent** - LLM validates if complaint is infrastructure-related
-3. **ClassificationAgent** - Classifies into 12 categories (ROADS, ELECTRICITY, WATER, etc.)
-4. **RiskAssessorAgent** - Scores 0-100 across safety, urgency, population impact
-5. **RoutingAgent** - Maps to department + selects best contractor by specialization/rating/workload
-6. **WorkOrderAgent** - Creates work order with SLA deadline and cost estimate
-7. **TrackingAgent** - Sends notifications, WebSocket broadcasts
-
-All agents extend `BaseAgent` with `async process(context, db)` signature. `PipelineContext` dataclass carries state between agents.
-
-### Key Design Decisions
-
-- **No citizen login**: Citizens use email + OTP to view past complaints
-- **JWT auth for admin/officer only** - no contractor login
-- **Multi-tenant**: `tenant_id` column on all tables, auto-assigned from first tenant if not provided
-- **SQLite for dev**: All model IDs use `String(36)` (not PostgreSQL UUID), arrays use `JSON` type
-- **Direct bcrypt** (not passlib) for password hashing - Python 3.14 compatibility
-- **State/district stored on complaints** from Nominatim geocoding for geographic filtering
+| Phase | What landed |
+|---|---|
+| 0 | v1 deleted, config, 17 models, baseline migration, seed, app boots |
+| 1a–1c | `llm.py`, the graph, checkpointing, media subgraph, HTTP + WebSocket streaming |
+| 2a | RAG: corpus, chunking, FAISS, hybrid retrieval with RRF, ingest CLI |
+| 2b | Four nodes grounded with citations, `investigate` loop, case records, semantic cache, SLA monitor |
+| 2c | Semantic clustering, daily briefing, officer email draft, scheduled jobs |
+| 3 | Golden set, three-column eval, judges, regression gate, observability |
+| 4–6 | Officer ReAct agent (next), six frontend screens, polish and ADRs |
 
 ## Commands
 
-### Backend
 ```bash
 cd backend
-pip install -r requirements.txt
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-# Seed database: POST http://localhost:8000/admin/seed
-# Admin login: admin@civicai.gov / admin123
+.venv/bin/python -m pytest -q                       # 645 tests, no network, no key, ~10s
+.venv/bin/python -m uvicorn app.main:app --reload   # API on :8000
+.venv/bin/python -m alembic upgrade head            # 5 migrations
+.venv/bin/python -m app.ai.rag.ingest --collection all   # build the FAISS indexes
+.venv/bin/python -m app.evals.run --config all --flash-only --resume  # the eval sweep
 ```
 
-### Frontend
-```bash
-cd frontend
-npm install
-npm run dev          # Dev server on port 5173
-npm run build        # Production build
+The frontend under `frontend/` is **still v1-era**: it calls nineteen endpoints,
+of which five exist. Do not trust it as a description of the API.
+
+## Architecture
+
+```
+backend/app/
+  ai/
+    graph/        state, nodes, edges, build, runner  — the pipeline
+    prompts/      registry keyed on (name, version)
+    rag/          embeddings, chunking, FAISS store, retrievers, ingest, cases, corpus/
+    llm.py        the ONLY module that builds a chat model
+    cache.py      semantic cache
+    observability.py  @traced, run metadata
+  api/            citizen-facing HTTP + WebSocket
+  db/models/      SQLAlchemy models
+  services/       geocoding, media, notify, sla, clustering, briefing, email_draft, scheduler
+  evals/          the eval harness — a consumer of the app, never a dependency
 ```
 
-### Docker (requires Docker)
-```bash
-docker-compose up --build
+### The graph
+
+`GRAPH_VERSION = "2b.0"`. Nine nodes:
+
 ```
+intake → [analyse_media ⇉] → validate → classify → ⟳ investigate → assess_risk → route → work_order → notify
+```
+
+`classify` branches to `investigate` below `CONFIDENCE_THRESHOLD` (0.7), which loops
+at most `MAX_INVESTIGATE_TURNS` (3) times, widening its taxonomy search each turn.
+`intake` fans out one `analyse_media` branch per uploaded file.
+
+### Rules that are load-bearing
+
+- **Nodes never construct a model, a retriever or a session.** Dependencies arrive
+  through `config["configurable"]` (`ai/graph/deps.py`). Tests inject a
+  `RunnableLambda` for a chain and a small stub for a retriever. A node that built
+  its own model could not be tested, because LangChain's fake chat models raise on
+  `with_structured_output`.
+- **Retrieval is a soft dependency.** A missing index or a dead retriever records
+  `errors: ["<node>: retrieval unavailable: …"]` and the node still produces its
+  output. The SLA window, the department and the tracking id never wait on the index.
+- **A rejection is not a failure.** `terminal_reason` means the complaint was
+  correctly rejected; `errors` means something broke. v1 conflated them, which is why
+  a rejected complaint was stored looking exactly like an unprocessed one.
+- **Every Pydantic class in `ComplaintState` must be in `CHECKPOINT_ALLOWLIST`**
+  (`ai/graph/state.py`). A missing class deserialises as a plain dict rather than
+  raising, and the failure surfaces much later as an `AttributeError`.
+- **No hardcoded municipal values in the decision path.** Costs come from the rate
+  card, SLA windows from `Tenant.config`, departments from `CATEGORY_DEPARTMENT`.
+  `tests/ai/rag/test_corpus.py` asserts the corpus and the code agree.
+- **Everything is tenant-scoped.** `route` fails closed without a `tenant_id`;
+  `assess_risk` retrieves no precedent without one. An unscoped query spans tenants.
+- **`app/ai/` must not import `app/api/`**, and nothing may import `app/evals/`.
+  `tests/test_import_rules.py` enforces both.
+- **Prompts are versioned and old versions stay registered.** `classify` v1 and
+  `assess_risk` v1 are the ungrounded baselines the eval compares against; deleting
+  them would make that comparison unrepeatable.
 
 ## Configuration
 
-Backend config via `.env` file in `backend/` directory (loaded by `app/config.py`):
-- `GEMINI_API_KEY` - Required for AI pipeline (free tier: gemini-2.5-flash-lite)
-- `LLM_PROVIDER` - "gemini" (default), "anthropic", or "openai"
-- `DATABASE_URL` - SQLite default: `sqlite:///./civicai.db`
+`backend/.env`, loaded by `app/config.py`. `.env.example` documents every field and
+`tests/test_config.py` fails if a setting is missing from it.
 
-## API Structure
+```
+GEMINI_API_KEY=            # required for anything live
+GEMINI_MODEL=gemini-3.5-flash-lite     # model ids expire; a 404 on every node means check these
+GEMINI_MODEL_STRONG=gemini-3.5-flash
+LLM_REQUESTS_PER_SECOND=0.2            # the free tier allows 15 generate requests/minute/model
+LLM_TIMEOUT_SECONDS=60                 # without it a stalled connection hangs a run forever
+BACKGROUND_JOBS_ENABLED=true           # SLA monitor, clustering, briefing, cases refresh
+```
 
-- `POST /complaints/` - FormData (supports file uploads)
-- `GET /complaints/track/{tracking_id}` - Full complaint details with media and work order
-- `POST /complaints/verify-email` + `POST /complaints/verify-otp` - OTP flow
-- `GET /public/dashboard` - Filterable by state, district, category
-- `POST /admin/login` - JWT auth
-- `GET /admin/complaints`, `GET /admin/work-orders`, `GET /admin/analytics` - Auth required
-- `GET /health` - Health check
-- `/uploads/*` - Static file serving for uploaded media
+**Free-tier quotas, measured:** flash-lite 500/day and 15/minute; the strong tier
+20/**day**; embeddings 100/minute. A full eval sweep is ~555 calls, so it fits in one
+day and leaves little over. `--flash-only` keeps a sweep off the strong tier.
 
-## File Serving
+## Testing
 
-Uploaded files are saved to `backend/uploads/` with paths stored as `uploads/filename.ext`. FastAPI serves them via `StaticFiles` mount at `/uploads`.
+645 tests, no network, no API key, about ten seconds. Three things to know:
+
+- **Fakes everywhere.** `FakeEmbedder` is content-hashed, so only *identical* text is
+  similar under it — a similarity threshold tested with it is vacuous, which is why
+  `tests/services/test_clustering.py` carries a small bag-of-words embedder instead.
+- **Every unit test passing does not mean the system works.** Both production bugs
+  found in the first live runs — retired model ids, and no request timeout — were
+  invisible to all of them. Run something real before trusting a change.
+- **The eval harness is the other half of the test suite.** `app/evals/` measures
+  what pytest cannot: whether retrieval helps, whether a threshold is right, whether
+  a prompt change is an improvement or a trade. `docs/07-evaluation-and-observability.md`
+  has the current numbers and, more usefully, what is *not* measured.
+
+## Where the known defects are
+
+`docs/07-evaluation-and-observability.md` §5 and the carried-forward sections of the
+phase plans. The one that matters most today: **`validate` rejects 18 of 88 real
+complaints** (invalid-complaint precision 0.40) to catch all 12 junk ones. `VALIDATE_V2`
+is written and registered but not yet the default, pending an A/B measurement.
+
+## Conventions
+
+- **Commit messages carry no trailers.** No `Co-Authored-By`, no `Claude-Session`.
+  Imperative subject, body explains *why*. Check with
+  `git log -1 --format=%B | grep -ci co-authored` → `0`.
+- Tests are written before the code, and their names are sentences.
+- A docstring on every module saying what it is for and what was rejected; a comment
+  on the non-obvious line. The reader is an intermediate Python programmer.
+- **Never report a number the code cannot produce.** A metric with no samples is
+  `None`, not `0.0`; a cost with no configured rates prints `not configured`; a
+  metric carries the `n` it was computed over. This rule has caught four reporting
+  bugs in this repository's own tooling.
