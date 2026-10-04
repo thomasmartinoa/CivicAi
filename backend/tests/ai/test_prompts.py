@@ -182,3 +182,35 @@ def test_the_judge_prompt_scores_one_criterion_with_its_anchors():
                              evidence="[1] sop_roads.md")
     assert "score only this criterion" in rendered.lower()
     assert "<artifact>" in rendered and "<evidence>" in rendered
+
+
+def test_validate_v2_tells_the_model_the_scope_v1_left_it_to_guess():
+    """The 2026-10-04 sweep measured invalid-complaint precision at 0.40: validate
+    rejected 18 of 88 real complaints, among them twenty gas cylinders in a
+    residential building and a child's dog bite. The cause was scope, not strictness
+    — v1 said "be strict about subject matter" and never named the twelve categories
+    the classifier handles, so the model applied its own narrower idea of
+    "infrastructure". v2 names them."""
+    from app.ai.prompts import get_prompt
+    from app.constants import Category
+
+    v1 = get_prompt("validate", "v1").format(description="x")
+    v2 = get_prompt("validate", "v2").format(description="x")
+
+    for category in Category:
+        assert category.value in v2, f"{category.value} missing from validate v2"
+        if category.value in ("FIRE_HAZARD", "STRAY_ANIMALS", "HEALTH"):
+            assert category.value not in v1, "v1 is the ungrounded baseline; leave it"
+
+    assert "vagueness is not grounds for rejection" in v2.lower()
+    assert "more costly" in v2, "the asymmetry has to be stated, not implied"
+    assert "<report>" in v2, "the injection fence stays"
+
+
+def test_both_validate_versions_stay_registered():
+    """v1 is the before-number for the fix; deleting it would make the comparison
+    unrepeatable."""
+    from app.ai.prompts import PROMPT_REGISTRY
+
+    assert ("validate", "v1") in PROMPT_REGISTRY
+    assert ("validate", "v2") in PROMPT_REGISTRY
