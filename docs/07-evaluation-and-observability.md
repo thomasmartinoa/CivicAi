@@ -268,29 +268,40 @@ did the chunk that answers it come back? Each case names a substring only the ri
 chunk contains, so the answer is set membership rather than an opinion, and the whole
 suite costs seven embeddings and no chat calls.
 
-**recall@3 = 0.86, six of seven.**
+**recall@3 = 1.00, seven of seven** — after a fix the first measurement prompted.
+It read **0.86, six of seven** before:
 
-| case | result |
-|---|---|
-| `work_order.pothole` | found at rank 2 |
-| `work_order.cluster` | found at rank 1 |
-| `assess_risk.bands` | found at rank 3 |
-| `route.roads_ownership` | found at rank 1 |
-| `route.construction_ownership` | found at rank 1 |
-| `investigate.taxonomy` | found at rank 2 |
-| **`work_order.trench`** | **missed** |
+| case | before | after |
+|---|---|---|
+| `work_order.trench` | **missed** | found at rank 1 |
+| `work_order.pothole` | rank 2 | rank 1 |
+| `work_order.cluster` | rank 1 | rank 1 |
+| `assess_risk.bands` | rank 3 | rank 3 |
+| `route.roads_ownership` | rank 1 | rank 1 |
+| `route.construction_ownership` | rank 1 | rank 1 |
+| `investigate.taxonomy` | rank 2 | rank 2 |
 
-The miss is the one three live runs had already shown, now explained. The query
-"unit rates for CONSTRUCTION repair materials and labour" returns the rate card's
-three *prose* sections — Purpose, Notes on use, Grouped work at multiple sites — and
-never its unit-rates table. The identical query for ROADS finds the table at rank 2.
+The miss was the one three live runs had already shown. The query "unit rates for
+CONSTRUCTION repair materials and labour" returned the rate card's three *prose*
+sections — Purpose, Notes on use, Grouped work at multiple sites — and never its
+unit-rates table. The identical query for ROADS found the table at rank 2.
 
-The reason is the shape of the document, not the retriever: the table holds about
-thirty rows of which two are CONSTRUCTION, so for a CONSTRUCTION query that chunk is
-diluted by every other category's vocabulary, while the prose sections discuss rates
-in the query's own words. The structural fix is to make the table retrievable per
-category — chunk it by category, or carry `category` metadata per row so
-`work_order` can filter — and it is deliberately not applied here.
+**The cause was the document's shape, not the retriever.** The table was a single
+1,780-character chunk spanning twelve categories, so for a CONSTRUCTION query
+"CONSTRUCTION" was two rows out of twenty-five and the chunk lost to prose that
+discusses rates in the query's own words. Giving each category its own subsection
+gives each one a 100–300 character chunk that is entirely about it:
+
+```
+before:  rate_card.md › Unit rates by item                     (1,780 chars, 12 categories)
+after:   rate_card.md › Unit rates by item › CONSTRUCTION unit rates   (182 chars)
+```
+
+No chunking code changed — the header-aware splitter already did this — and the
+citations improved as a side effect. `work_order.pothole` moving from rank 2 to rank
+1 says the dilution was costing the categories that already worked, not just the one
+that failed. Two tests in `test_corpus.py` guard the structure, because a fix that
+lives in a markdown file is one merge away from being undone.
 
 Writing these cases caught two bugs in the cases themselves, both matching on a
 section *header*. Headers live in chunk metadata, not chunk text, so both reported a
@@ -331,10 +342,9 @@ against hand labels. No hand labels have been written, so
 The labels are deliberately not generated: a judge validated against labels the
 same family of model produced would be measuring its own reflection.
 
-**The rate-card miss is measured and diagnosed but not fixed** — see §4.4.
-Phase 3's job is to measure; tuning retrieval inside the phase that measures it is
-how a project ends up with numbers it cannot explain. The fix now has a
-before-number to be judged against.
+**The rate-card miss is fixed** — §4.4 has the before and after. It is the one
+item on this list that closed, and it closed because the measurement said precisely
+what was wrong rather than suggesting the retriever needed tuning.
 
 ---
 
