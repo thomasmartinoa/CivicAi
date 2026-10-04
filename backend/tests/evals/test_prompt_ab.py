@@ -116,3 +116,34 @@ def test_the_length_guard_is_part_of_the_comparison(monkeypatch):
     short = next(i for i in load_golden() if len(i.description) < MIN_DESCRIPTION_CHARS)
     assert decide("v2", short) is False, "the guard decides, with no model call"
     assert calls == []
+
+
+def test_a_quota_wall_mid_run_makes_the_comparison_inconclusive():
+    """The guard checked the sample and not the survivors, which is half a guard.
+
+    A run that starts with a representative sample and then loses most of it to a
+    daily quota can end up scoring a handful of items with no junk among them — the
+    very situation the sample guard exists to prevent, arriving by a different door.
+    The verdict has to notice.
+    """
+    items = load_golden()
+    junk_ids = {i.id for i in items if not i.expected_valid}
+
+    def dies_after_five(version, item):
+        # Only the first few real complaints get through; every junk item 429s.
+        if item.id in junk_ids:
+            return None
+        return item.expected_valid
+
+    a = evaluate_version("v1", items, decide=lambda v, i: dies_after_five("v1", i))
+    b = evaluate_version("v2", items, decide=lambda v, i: dies_after_five("v2", i))
+    assert a.errored == len(junk_ids)
+    assert "inconclusive" in verdict(a, b)
+    assert "junk" in verdict(a, b)
+
+
+def test_a_version_result_knows_whether_it_saw_both_classes():
+    items = load_golden()
+    real_only = [i for i in items if i.expected_valid][:10]
+    assert evaluate_version("v2", real_only, decide=_perfect).conclusive is False
+    assert evaluate_version("v2", items, decide=_perfect).conclusive is True

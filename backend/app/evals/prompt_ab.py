@@ -42,6 +42,19 @@ class VersionResult:
     invalid_recall: float | None
     wrongly_rejected: list[str] = field(default_factory=list)
     junk_accepted: list[str] = field(default_factory=list)
+    junk_scored: int = 0
+    real_scored: int = 0
+
+    @property
+    def conclusive(self) -> bool:
+        """Did enough of both classes actually get scored?
+
+        The sample guard runs before the calls; this is about what survived them. A
+        daily quota wall mid-run can leave a representative sample scored down to a
+        handful of real complaints and no junk, which is the same blindness the
+        guard exists to prevent arriving by a different door.
+        """
+        return self.junk_scored >= 3 and self.real_scored >= 3
 
     @property
     def summary(self) -> str:
@@ -99,7 +112,9 @@ def evaluate_version(version: str, items: list[GoldenItem], *,
     return VersionResult(version=version, scored=len(truth), errored=errored,
                          invalid_precision=precision, invalid_recall=recall,
                          wrongly_rejected=sorted(wrongly_rejected),
-                         junk_accepted=sorted(junk_accepted))
+                         junk_accepted=sorted(junk_accepted),
+                         junk_scored=sum(1 for t in truth if not t),
+                         real_scored=sum(1 for t in truth if t))
 
 
 def compare(version_a: str, version_b: str, *, limit: int | None,
@@ -118,6 +133,13 @@ def verdict(a: VersionResult, b: VersionResult) -> str:
     more junk is not an improvement, it is a looser threshold, and the honest
     answer is that the trade needs a decision rather than a default change.
     """
+    for result in (a, b):
+        if not result.conclusive:
+            return (f"inconclusive: {result.version} scored only {result.junk_scored} junk "
+                    f"and {result.real_scored} real complaints"
+                    + (f" ({result.errored} items errored)" if result.errored else "")
+                    + " — too few of either to tell 'accepts more' from 'accepts everything'")
+
     fewer_wrong = len(b.wrongly_rejected) < len(a.wrongly_rejected)
     more_junk = len(b.junk_accepted) > len(a.junk_accepted)
 
