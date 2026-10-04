@@ -189,27 +189,31 @@ vectors:
 | threshold | precision | recall |
 |---|---|---|
 | 0.50–0.70 | 0.30 | 1.00 |
-| **0.75** | **0.11** | **0.17** |
+| 0.75 | 0.67 | 1.00 |
 | 0.80–0.90 | 1.00 | 1.00 |
 | 0.95 | not applicable | 0.00 |
 
-**0.82 is defensible** — mid-band, with margin either side.
+**0.82 is defensible** — mid-band, with margin either side. Recall holds at 1.00
+from 0.60 to 0.90 and precision falls away gradually below 0.80, which is the shape
+a threshold should have: loosening it should cost precision, never recall.
 
-The 0.75 row is the more valuable result. It exposed a defect in the production
-detector: at a marginal threshold an unrelated but *higher-priority* complaint
-becomes the cluster lead, matches part of a genuine group, and emits a cluster —
-and because `claimed` then locks those members, the real group can no longer form.
+It did not have that shape at first, and finding out why was the more valuable
+result. The original sweep read **precision 0.11, recall 0.17 at 0.75** — a hole in
+the middle of the range. The cause was in the detector, not the eval: it committed
+the first acceptable lead in priority order, so at a marginal threshold an urgent
+but loosely related complaint seeded a cluster, took one member of a genuinely tight
+group, and left the rest below `min_size` and unclustered.
 
 ```
-0.75:  lead amb-fw-10 (priority 70) -> [amb-fw-1, amb-fw-10, dup-1c]   split the group
-0.82:  lead dup-1c    (priority 68) -> [dup-1a, dup-1b, dup-1c]        correct
+0.75, before:  lead amb-fw-10 (priority 70) -> [amb-fw-1, amb-fw-10, dup-1c]
+0.75, after:   lead dup-1c    (priority 68) -> [dup-1a, dup-1b, dup-1c]
 ```
 
-So `detect_clusters` is **non-monotonic in the threshold** and sensitive to priority
-ordering. At the configured value it does not bite, which is luck rather than
-design. Both candidate fixes — scoring candidate clusters and emitting the best, or
-requiring a lead to be mutually nearest with its members — cost more pair
-comparisons, so the choice is recorded rather than made.
+Selection is now best-first: each round scores the candidate cluster around every
+unclaimed seed by mean pairwise similarity and emits the most cohesive one, and
+urgency only decides who leads a group once it has been chosen. That restored recall
+to 1.00 at 0.75 and lifted precision from 0.11 to 0.67. The failing case is a
+deterministic test in `tests/services/test_clustering.py`.
 
 **The eval had to be fixed twice before these numbers meant anything.** The first
 version re-embedded every text once per threshold (800 calls for 100 texts, into the
