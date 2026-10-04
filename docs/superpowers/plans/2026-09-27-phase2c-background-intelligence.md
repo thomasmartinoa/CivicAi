@@ -593,8 +593,22 @@ closed; two Phase 2b items remain open and are restated at the end.
   and recall over the duplicate slice are both 1.00 across 0.80–0.90, collapse to
   0.00 recall at 0.95, and fall to 0.30 precision at 0.50–0.70. The configured
   0.82 sits mid-band with margin either side. That item is closed.
-- **A new defect the sweep exposed: a greedy lead can steal a tighter group's
-  members.** At a marginal threshold an unrelated but higher-priority complaint
+- **Fixed (2026-10-04): the greedy lead could steal a tighter group's members.**
+  Measured before and after on real embeddings, at the threshold where it bit:
+
+  | threshold 0.75 | precision | recall |
+  |---|---|---|
+  | first-acceptable lead | 0.11 | 0.17 |
+  | best-first by cohesion | **0.67** | **1.00** |
+
+  Recall is now 1.00 across 0.60-0.90 instead of collapsing at 0.75, so the
+  detector is monotonic in the threshold: lowering it costs precision and never
+  recall, which is the shape it should always have had. Selection scores the
+  candidate cluster around every unclaimed seed by mean pairwise similarity and
+  emits the most cohesive; urgency now only decides who leads a chosen group. The
+  original failure is a deterministic test in `test_clustering.py`.
+
+  The defect as recorded at the time: At a marginal threshold an unrelated but higher-priority complaint
   becomes the lead, matches part of a real group, and emits a cluster — and
   because `claimed` then makes those members unavailable, the real group can no
   longer form. Measured at threshold 0.75: `amb-fw-10` (priority 70) took `dup-1c`
