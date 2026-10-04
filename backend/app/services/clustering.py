@@ -107,44 +107,93 @@ def cluster_candidates(
 ) -> list[Cluster]:
     """Group candidates by similarity within a radius. Greedy, deterministic.
 
-    The walk is ordered by descending priority, then oldest first, then id, so
-    the most urgent report leads its cluster and the same input always produces
-    the same output whatever order it arrives in.
+    Best-first: each round scores the candidate cluster around every unclaimed
+    seed by mean pairwise similarity and emits the most cohesive one, then starts
+    again with its members claimed. Within a chosen group the most urgent report
+    leads, because its category and district are what the work order routes on.
 
-    A lead claims every unclaimed candidate that is both within `radius_km` and
-    at or above `threshold` cosine. If the group does not reach `min_size` the
-    claims are released, so those candidates remain available to a later lead —
-    a pair is not a cluster, but it must not be consumed as one either.
+    It used to commit the first acceptable lead in priority order, which let an
+    urgent but loosely related complaint take one member of a tighter group and
+    strand the rest below min_size — see _cohesion for what measured that.
     """
     if len(candidates) < max(2, min_size):
         # Nothing can group, so do not pay for embeddings at all. The hourly
         # job runs against a real embedding API.
         return []
 
-    ordered = sorted(candidates, key=lambda c: (-c.priority, c.created_at, c.id))
+    ordered = sorted(candidates, key=_walk_order)
     vectors = np.asarray(embedder.embed_documents([c.text for c in ordered]), dtype="float32")
 
     claimed: set[str] = set()
     clusters: list[Cluster] = []
 
-    for i, lead in enumerate(ordered):
-        if lead.id in claimed:
-            continue
-        members = [lead]
-        for j, other in enumerate(ordered):
-            if i == j or other.id in claimed:
+    # Best-first, not first-acceptable. Each round builds the candidate cluster
+    # around every unclaimed seed, emits the most cohesive one, and starts again
+    # with its members claimed.
+    while True:
+        best: tuple[tuple, list[int]] | None = None
+        for i in range(len(ordered)):
+            if ordered[i].id in claimed:
                 continue
-            if haversine_km(lead.coords, other.coords) > radius_km:
+            members = _reachable(i, ordered, vectors, claimed, radius_km, threshold)
+            if len(members) < min_size:
                 continue
-            if cosine(vectors[i], vectors[j]) < threshold:
-                continue
-            members.append(other)
-        if len(members) < min_size:
-            continue  # nothing claimed yet, so the members stay available
+            # Cohesion first, then size, then the walk order — every term present
+            # so the choice cannot depend on dictionary or input ordering.
+            key = (-_cohesion(members, vectors), -len(members), _walk_order(ordered[i]))
+            if best is None or key < best[0]:
+                best = (key, members)
+        if best is None:
+            break
+        members = [ordered[i] for i in best[1]]
         claimed.update(m.id for m in members)
-        clusters.append(Cluster(lead=lead, members=members))
+        # The most urgent member leads: its category and district are what the
+        # grouped work order routes on.
+        clusters.append(Cluster(lead=min(members, key=_walk_order), members=members))
 
     return clusters
+
+
+def _walk_order(candidate: Candidate) -> tuple:
+    """Most urgent first, then oldest, then id. Used for the lead and for
+    tie-breaking, so both are stable."""
+    return (-candidate.priority, candidate.created_at, candidate.id)
+
+
+def _reachable(seed: int, ordered: list[Candidate], vectors, claimed: set[str],
+               radius_km: float, threshold: float) -> list[int]:
+    """The seed plus every unclaimed candidate within radius and above threshold."""
+    members = [seed]
+    for j in range(len(ordered)):
+        if j == seed or ordered[j].id in claimed:
+            continue
+        if haversine_km(ordered[seed].coords, ordered[j].coords) > radius_km:
+            continue
+        if cosine(vectors[seed], vectors[j]) < threshold:
+            continue
+        members.append(j)
+    return members
+
+
+def _cohesion(members: list[int], vectors) -> float:
+    """Mean pairwise similarity inside the group — how much one job this really is.
+
+    This is what replaced "whichever urgent report got there first". The Phase 3
+    clustering eval found that at a marginal threshold a high-priority but loosely
+    related complaint would seed a cluster, take one member of a genuinely tight
+    group, and leave the rest below min_size and unclustered — so the detector was
+    non-monotonic in the threshold. Scoring the whole group instead means the
+    tighter set wins and urgency only decides who leads it.
+
+    The cost is a round per emitted cluster rather than one pass: O(rounds x n^2)
+    comparisons. At the hundreds of open complaints this job sees hourly that is
+    nothing; if it ever matters, bucket by a coarse geohash first and compare
+    within buckets.
+    """
+    pairs = [(a, b) for index, a in enumerate(members) for b in members[index + 1:]]
+    if not pairs:
+        return 0.0
+    return sum(cosine(vectors[a], vectors[b]) for a, b in pairs) / len(pairs)
 
 
 # ── the hourly job ──────────────────────────────────────────────────────────

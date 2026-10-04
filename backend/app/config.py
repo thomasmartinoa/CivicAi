@@ -41,7 +41,10 @@ class Settings(BaseSettings):
     ollama_enabled: bool = False
     # Requests per second ceiling shared by every task. The Gemini free tier
     # rate-limits aggressively and a 100-item eval sweep will hit it.
-    llm_requests_per_second: float = 0.5
+    # 0.2/s = 12 a minute, under the Gemini free tier's measured ceiling of 15
+    # generate requests per minute per model. The old default of 0.5 was 30 a
+    # minute and produced 429s inside the first minute of an eval sweep.
+    llm_requests_per_second: float = 0.2
     llm_max_retries: int = 3
     # A stalled connection must fail rather than hang. Without this an eval sweep
     # sat on one request for five minutes with no response and no retry, and a

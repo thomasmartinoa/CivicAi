@@ -404,3 +404,72 @@ def test_the_cluster_contractor_is_scored_against_the_leads_district(db_session,
     assert contractor.zone == "South Bangalore", (
         "the ROADS contractor in the lead's own zone should win the zone bonus"
     )
+
+
+# ── the greedy-lead defect the Phase 3 eval exposed ─────────────────────────
+
+
+def _hijack_fixture():
+    """A tight group of three, plus two loosely related reports at the same spot
+    whose highest-priority member matches exactly one of the group.
+
+    Under WordEmbedder, with threshold 0.6:
+      group:    A-B 0.87, A-C 0.87, B-C 0.75     (mean cohesion 0.83)
+      hijacker: M-M2 0.89, M-B 0.67, M2-B 0.50   (mean cohesion 0.69)
+
+    M has the highest priority, so a walk that commits the first acceptable lead
+    emits {M, M2, B} and claims B — leaving A and C below min_size and unclustered.
+    This is the 0.75-threshold failure the real sweep found, made reproducible.
+    """
+    return [
+        _candidate("mg road water leak surface", MG_ROAD, priority=90, id="M"),
+        _candidate("mg road water leak", MG_ROAD_50M, priority=80, id="M2"),
+        _candidate("mg road hole", MG_ROAD_50M, priority=60, id="A"),
+        _candidate("mg road hole surface", MG_ROAD_200M, priority=50, id="B"),
+        _candidate("mg road hole caved", MG_ROAD, priority=40, id="C"),
+    ]
+
+
+def test_a_high_priority_loose_report_cannot_break_up_a_tighter_group():
+    """The defect: priority decided which cluster formed, so an unrelated but more
+    urgent report could take one member of a real group and strand the rest. The
+    tighter group now wins, and priority only decides who leads it."""
+    clusters = _cluster(_hijack_fixture(), threshold=0.6, min_size=3)
+
+    assert len(clusters) == 1
+    assert sorted(clusters[0].ids) == ["A", "B", "C"], (
+        "the cohesive group must survive, not the urgent one"
+    )
+    assert clusters[0].lead.id == "A", "within the group, the most urgent still leads"
+
+
+def test_the_loose_pair_is_left_unclustered_rather_than_half_formed():
+    """Two related reports are not a cluster at min_size 3, and must not become one
+    by borrowing a member from somewhere else."""
+    clusters = _cluster(_hijack_fixture(), threshold=0.6, min_size=3)
+    clustered = {i for c in clusters for i in c.ids}
+    assert "M" not in clustered and "M2" not in clustered
+
+
+def test_selection_is_deterministic_whatever_order_the_candidates_arrive():
+    fixture = _hijack_fixture()
+    first = _cluster(fixture, threshold=0.6, min_size=3)
+    second = _cluster(list(reversed(fixture)), threshold=0.6, min_size=3)
+    assert [sorted(c.ids) for c in first] == [sorted(c.ids) for c in second]
+    assert [c.lead.id for c in first] == [c.lead.id for c in second]
+
+
+def test_two_separate_tight_groups_both_form():
+    """Choosing the best cluster each round must not stop after the first."""
+    far = (13.0827, 77.5877)
+    candidates = [
+        _candidate("mg road hole", MG_ROAD, priority=60, id="A"),
+        _candidate("mg road hole surface", MG_ROAD_50M, priority=50, id="B"),
+        _candidate("mg road hole caved", MG_ROAD_200M, priority=40, id="C"),
+        _candidate("streetlight dark junction", far, priority=55, id="D"),
+        _candidate("streetlight dark", (far[0] + 0.0004, far[1]), priority=45, id="E"),
+        _candidate("streetlight dark school", (far[0] + 0.0008, far[1]), priority=35, id="F"),
+    ]
+    clusters = _cluster(candidates, threshold=0.6, min_size=3)
+    assert len(clusters) == 2
+    assert {tuple(sorted(c.ids)) for c in clusters} == {("A", "B", "C"), ("D", "E", "F")}
