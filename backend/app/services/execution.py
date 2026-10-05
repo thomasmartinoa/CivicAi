@@ -16,7 +16,24 @@ from app.db.session import SessionLocal
 logger = logging.getLogger(__name__)
 
 # Statuses meaning "the graph has not reached a conclusion for this complaint".
-UNFINISHED = ("submitted",)
+#
+# 'failed' is here, and it was not until a live run showed why. A gas-cylinder leak
+# near a bus stand was validated, classified FIRE_HAZARD at 0.99 confidence, and then
+# lost because assess_risk got a 503 "experiencing high demand" — a transient
+# provider hiccup. The complaint was written 'failed' with no risk level and no work
+# order, and nothing ever looked at it again: the checkpointer held everything needed
+# to resume, and this tuple did not mention the status it had landed in. The module
+# docstring claims the checkpointer fixed exactly this, so the claim was wrong for
+# every failure that was not a restart.
+UNFINISHED = ("submitted", "failed")
+
+MAX_RESUME_ATTEMPTS = 3
+"""How many times a complaint may be re-driven before it is left alone.
+
+Without a bound, a complaint that fails for a permanent reason — a malformed record,
+a bug in a node — would be retried on every single restart, for ever. The count comes
+from the AgentRun rows already being written for the audit trail, so nothing new has
+to be tracked."""
 
 # A restart after an outage can find hundreds of unfinished complaints. Firing
 # them all at once would compete with live traffic for the connection pool and
@@ -88,16 +105,48 @@ def schedule_complaint_run(complaint_id: str) -> None:
 
 
 def resume_incomplete_runs(session_factory: Callable = SessionLocal) -> list[str]:
-    """Complaint ids the graph never finished. Called at startup."""
+    """Complaint ids the graph never finished. Called at startup.
+
+    Includes complaints that reached 'failed', because the overwhelming majority of
+    those are a provider being briefly busy rather than anything about the complaint.
+    Bounded by MAX_RESUME_ATTEMPTS so a permanently broken one is not re-driven on
+    every restart for the rest of the deployment's life.
+    """
+    from sqlalchemy import func
+
+    from app.db.models.ai import AgentRun
     from app.db.models.complaint import Complaint
 
     session = session_factory()
     try:
+        attempts = (
+            session.query(AgentRun.complaint_id, func.count(AgentRun.id).label("n"))
+            .group_by(AgentRun.complaint_id)
+            .subquery()
+        )
         pending = (
             session.query(Complaint.id)
+            .outerjoin(attempts, attempts.c.complaint_id == Complaint.id)
             .filter(Complaint.status.in_(UNFINISHED))
+            # A complaint with no run rows at all has never been attempted, so the
+            # null has to pass rather than be compared away.
+            .filter((attempts.c.n.is_(None)) | (attempts.c.n < MAX_RESUME_ATTEMPTS))
             .all()
         )
+        abandoned = (
+            session.query(func.count(Complaint.id))
+            .join(attempts, attempts.c.complaint_id == Complaint.id)
+            .filter(Complaint.status.in_(UNFINISHED),
+                    attempts.c.n >= MAX_RESUME_ATTEMPTS)
+            .scalar()
+        ) or 0
+        if abandoned:
+            # Loud, because each one is a citizen's report that the system has given
+            # up on. Nothing else in the application will mention them again.
+            logger.error(
+                "%d complaint(s) have failed %d or more times and will not be retried; "
+                "they need a human to look at them", abandoned, MAX_RESUME_ATTEMPTS,
+            )
         return [row.id for row in pending]
     finally:
         session.close()

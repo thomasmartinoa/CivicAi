@@ -132,3 +132,77 @@ async def test_resume_sweep_respects_concurrency_bound(submitted, monkeypatch):
     await wait_for_completion()
     assert max_active <= RESUME_CONCURRENCY, \
         f"observed {max_active} concurrent executions, bound is {RESUME_CONCURRENCY}"
+
+
+def test_a_complaint_that_failed_is_resumed(db_session):
+    """Found by a live run. A gas-cylinder leak near a bus stand was validated,
+    classified FIRE_HAZARD at 0.99, and then lost because assess_risk got a 503
+    "experiencing high demand" — a provider being briefly busy. It was written
+    'failed' and nothing ever looked at it again, although the checkpointer held
+    everything needed to finish it.
+    """
+    complaint = Complaint(tracking_id="CIV-FAILED001", citizen_email="a@b.com",
+                          description="gas cylinder leaking near the bus stand",
+                          category="FIRE_HAZARD", status="failed")
+    db_session.add(complaint)
+    db_session.commit()
+
+    assert complaint.id in resume_incomplete_runs(session_factory=lambda: db_session)
+
+
+def test_a_complaint_that_keeps_failing_is_eventually_left_alone(db_session):
+    """Without a bound, one that fails for a permanent reason would be re-driven on
+    every restart for the rest of the deployment's life."""
+    from app.db.base import utcnow
+    from app.db.models.ai import AgentRun
+    from app.services.execution import MAX_RESUME_ATTEMPTS
+
+    complaint = Complaint(tracking_id="CIV-HOPELESS1", citizen_email="a@b.com",
+                          description="something that always breaks", status="failed")
+    db_session.add(complaint)
+    db_session.flush()
+    for _ in range(MAX_RESUME_ATTEMPTS):
+        db_session.add(AgentRun(complaint_id=complaint.id, thread_id=complaint.id,
+                                status="failed", started_at=utcnow(),
+                                finished_at=utcnow(), duration_ms=1, error="boom"))
+    db_session.commit()
+
+    assert complaint.id not in resume_incomplete_runs(session_factory=lambda: db_session)
+
+
+def test_a_complaint_under_the_attempt_limit_is_still_resumed(db_session):
+    from app.db.base import utcnow
+    from app.db.models.ai import AgentRun
+
+    complaint = Complaint(tracking_id="CIV-ONEMORE01", citizen_email="a@b.com",
+                          description="worth one more go", status="failed")
+    db_session.add(complaint)
+    db_session.flush()
+    db_session.add(AgentRun(complaint_id=complaint.id, thread_id=complaint.id,
+                            status="failed", started_at=utcnow(), finished_at=utcnow(),
+                            duration_ms=1, error="503"))
+    db_session.commit()
+
+    assert complaint.id in resume_incomplete_runs(session_factory=lambda: db_session)
+
+
+def test_a_resolved_complaint_is_never_resumed(db_session):
+    """Re-driving a finished complaint would issue a second work order, and
+    work_orders.complaint_id is unique, so it would also crash."""
+    complaint = Complaint(tracking_id="CIV-DONE00001", citizen_email="a@b.com",
+                          description="already dealt with", status="resolved")
+    db_session.add(complaint)
+    db_session.commit()
+
+    assert complaint.id not in resume_incomplete_runs(session_factory=lambda: db_session)
+
+
+def test_a_rejected_complaint_is_never_resumed(db_session):
+    """A rejection is a conclusion, not a failure — the distinction v1 lost."""
+    complaint = Complaint(tracking_id="CIV-NOPE00001", citizen_email="a@b.com",
+                          description="a neighbour dispute", status="rejected",
+                          terminal_reason="not infrastructure")
+    db_session.add(complaint)
+    db_session.commit()
+
+    assert complaint.id not in resume_incomplete_runs(session_factory=lambda: db_session)
