@@ -251,7 +251,8 @@ def _document_chunk_ids(session, chunk_ids: list[str | None]) -> dict[str, str]:
     rows = session.query(DocumentChunk.id, key).filter(key.in_(wanted)).all()
     return {chunk_id: row_id for row_id, chunk_id in rows}
 
-def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
+def persist_result(state: ComplaintState, session, *, duration_ms: int,
+                   thread_id: str | None = None) -> None:
     """Write complaint state changes and audit trail to the database.
 
     `decision_log` carries an `operator.add` reducer, so it accumulates across
@@ -268,7 +269,9 @@ def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
 
     complaint.status = status
     complaint.terminal_reason = state["terminal_reason"]
-    complaint.graph_thread_id = state["complaint_id"]
+    # The attempt's own thread, so a retried complaint points at the checkpoint
+    # that actually produced its result rather than the abandoned first one.
+    complaint.graph_thread_id = thread_id or state["complaint_id"]
     complaint.pipeline_version = GRAPH_VERSION
 
     if state["classification"]:
@@ -322,7 +325,7 @@ def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
     finished = utcnow()
     run = AgentRun(
         complaint_id=complaint.id,
-        thread_id=state["complaint_id"],
+        thread_id=thread_id or state["complaint_id"],
         status="completed" if status != "failed" else "failed",
         graph_version=GRAPH_VERSION,
         started_at=finished - timedelta(milliseconds=duration_ms),
@@ -443,6 +446,23 @@ async def _advance_streaming(
     return final.values, True
 
 
+def _thread_for(session, complaint) -> str:
+    """The checkpoint thread for this attempt.
+
+    The complaint id on a first attempt, so an interrupted run resumes. After a
+    failed run, the attempt number is appended, because the failed node is
+    checkpointed as complete and resuming that thread would replay its error rather
+    than retry it — see run_complaint's docstring.
+    """
+    from app.db.models.ai import AgentRun
+
+    failures = (session.query(AgentRun)
+                .filter(AgentRun.complaint_id == complaint.id,
+                        AgentRun.status == "failed")
+                .count())
+    return complaint.id if not failures else f"{complaint.id}:retry{failures}"
+
+
 async def run_complaint(
     complaint_id: str,
     *,
@@ -453,8 +473,23 @@ async def run_complaint(
 ) -> ComplaintState:
     """Run one complaint through the graph and persist what happened.
 
-    `thread_id` is the complaint id, so re-invoking with the same id resumes
-    that complaint's run rather than starting a new one.
+    `thread_id` is the complaint id for a first attempt, so re-invoking resumes that
+    complaint's run rather than starting a new one.
+
+    **A retry after a failed run gets a fresh thread**, suffixed with the attempt
+    number. This is not an optimisation, it is the difference between a resume that
+    works and one that lies. A node that fails does not raise — it returns
+    `{"errors": [...]}`, deliberately, because retrieval is a soft dependency — and
+    LangGraph has no way to tell that update apart from a successful one. So the
+    failed node is checkpointed as *complete*, and resuming the same thread replays
+    the stored error without ever re-calling the model. A live run proved it: a
+    FIRE_HAZARD complaint that lost assess_risk to a 503 was re-driven and failed
+    again in 20 milliseconds with a byte-identical error, having made no request at
+    all. The eval harness had the same bug and the same fix — `load_log` excludes
+    errored rows so `--resume` cannot bake in an outage.
+
+    The previous thread's checkpoint is left in place, so a failed run stays
+    inspectable.
 
     session_factory must return a session this call may close. It is closed on
     every path, including on error, which expunges its identity map — so a
@@ -472,8 +507,9 @@ async def run_complaint(
         complaint = session.query(Complaint).filter(Complaint.id == complaint_id).one()
         state = _state_for(complaint)
         deps = deps or build_deps(session_factory, complaint=complaint)
+        thread_id = _thread_for(session, complaint)
         config = to_configurable(
-            deps, thread_id=complaint_id,
+            deps, thread_id=thread_id,
             metadata=run_metadata(complaint),
             tags=[f"graph:{GRAPH_VERSION}"],
         )
@@ -511,7 +547,7 @@ async def run_complaint(
                 .count() > 0
             )
             if ran or not already_persisted:
-                persist_result(result, session, duration_ms=duration_ms)
+                persist_result(result, session, duration_ms=duration_ms, thread_id=thread_id)
             return result
         except Exception as exc:
             # Without this the complaint stays 'submitted' with nothing recording that

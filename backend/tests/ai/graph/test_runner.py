@@ -6,7 +6,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 import app.ai.graph.runner as runner_module
 from app.ai.graph.deps import GraphDeps
-from app.ai.graph.runner import _lazy_vision_chain, _media_to_prompt_vars, run_complaint
+from app.ai.graph.runner import (
+    _lazy_vision_chain, _media_to_prompt_vars, _thread_for, run_complaint,
+)
 from app.ai.schemas import (
     ClassificationResult, RiskAssessment, ValidationResult, VisionObservation,
 )
@@ -609,3 +611,56 @@ async def test_a_failed_run_also_records_a_sane_interval(env):
     assert run.status == "failed"
     assert run.error
     assert run.started_at <= run.finished_at
+
+
+async def test_a_retry_after_a_failure_actually_re_calls_the_model(env):
+    """The bug this guards against produced a resume that lied.
+
+    A node that fails does not raise — it returns {"errors": [...]}, deliberately,
+    because retrieval is a soft dependency — and LangGraph cannot tell that update
+    apart from a successful one. So the failed node was checkpointed as *complete*,
+    and re-running the same thread replayed the stored error without calling the
+    model. Live proof: a FIRE_HAZARD complaint that lost assess_risk to a 503 was
+    re-driven and failed again in 20ms with a byte-identical error, having made no
+    request at all.
+    """
+    from app.db.models.ai import AgentRun
+
+    session, complaint = env
+    calls = []
+
+    def flaky(payload):
+        calls.append(payload)
+        if len(calls) == 1:
+            raise RuntimeError("503 UNAVAILABLE: high demand")
+        return RiskAssessment(priority_score=90, risk_level=RiskLevel.CRITICAL)
+
+    checkpointer = InMemorySaver()
+    deps = _deps(risk_chain=RunnableLambda(flaky), session_factory=lambda: session)
+
+    await run_complaint(complaint.id, session_factory=lambda: session, deps=deps,
+                        checkpointer=checkpointer)
+    session.expire_all()
+    assert session.query(Complaint).one().risk_level is None, "the first run lost it"
+    assert len(calls) == 1
+
+    # The retry. Same checkpointer, which is the whole point: it must not be allowed
+    # to serve the failed node's cached error back.
+    await run_complaint(complaint.id, session_factory=lambda: session, deps=deps,
+                        checkpointer=checkpointer)
+
+    session.expire_all()
+    assert len(calls) == 2, "the retry must actually call the model again"
+    assert session.query(Complaint).one().risk_level == RiskLevel.CRITICAL.value
+
+    threads = {r.thread_id for r in session.query(AgentRun).all()}
+    assert len(threads) == 2, "a retry runs on its own thread, not the failed one"
+
+
+async def test_an_interrupted_run_still_resumes_on_the_same_thread(env):
+    """The retry-thread change must not break the original behaviour: a run that was
+    interrupted rather than failed has no AgentRun marked failed, so it keeps the
+    complaint id as its thread and resumes where it stopped."""
+    session, complaint = env
+    thread = _thread_for(session, complaint)
+    assert thread == complaint.id
