@@ -361,24 +361,49 @@ ends, and they belong with the frontend phase that will actually render them.
 
 ### Defects found by running it live, now fixed — and what that implies
 
-Both were invisible to 795 passing tests:
+All of these were invisible to a green suite:
 
 - `AgentRun.started_at` was left to the column default, which fires at INSERT, so
   `finished_at` landed *before* `started_at` and any interval query read negative.
 - The Gemini client's `max_retries` bypassed the shared rate limiter, making a 429
   storm self-amplifying. A `max_bucket_size` of 5 also broke the per-minute quota
   on the first burst alone.
+- **A transient provider 503 permanently abandoned a complaint.** `UNFINISHED` listed
+  only `"submitted"`, so the startup sweep looked for complaints that had never been
+  started and ignored every complaint the graph had given up on.
+- **And fixing that was not enough.** A failed node returns `{"errors": [...]}`
+  rather than raising — deliberately, because retrieval is a soft dependency — so
+  LangGraph checkpoints it as *complete*, and re-invoking the same thread replays the
+  stored error without calling the model. The resume was a no-op that re-reported a
+  stale failure in twenty milliseconds. A retry now runs on its own thread.
+
+The last two are one story and it is the most instructive thing in this phase. A
+gas-cylinder leak beside a bus stand was validated, classified `FIRE_HAZARD` at 0.99
+confidence, and then lost — twice — to a provider that was briefly busy. It now
+reaches risk critical, priority 94, a four-hour SLA and a contractor. **Nothing in the
+test suite could have told us**, because both failures depended on a real provider
+returning a real 503 at a real moment.
+
+Note also that the eval harness had the *same* replay bug and the same fix: `load_log`
+excludes errored rows so `--resume` cannot bake in an outage. That was fixed in Phase
+3, and the identical trap in the graph went unrecognised for a phase and a half. The
+shape of a bug recurs across layers that look nothing alike.
 
 The lesson is already in CLAUDE.md and is worth restating: **every unit test passing
-does not mean the system works.** Four of the four production bugs this project has
+does not mean the system works.** Six of the six production bugs this project has
 found were found by running it, not by testing it.
 
 ### Still unmeasured or unresolved
 
-- **The validator.** `validate` rejects 18 of 88 real complaints (precision 0.40).
-  `VALIDATE_V2` is written and registered; the A/B that would justify promoting it
-  was run on 2026-10-06 — see `docs/eval-reports/` for the outcome. Until `LATEST`
-  moves, the defect stands.
+- **The validator is resolved, and the baseline it invalidated is not.** `validate`
+  moved to v2 on 2026-10-06 after an A/B that was explicitly a trade
+  (`docs/eval-reports/2026-10-06-validate-v1-vs-v2.md`): v1 wrongly rejected 9 real
+  complaints in 40 and admitted no junk, v2 rejects 3 and admits 1. Promoted on the
+  judgement that a terminal rejection with no appeal path costs a citizen far more
+  than a junk row costs an officer. **Consequence: the core baseline's macro-F1 of
+  0.93 was measured with v1 in front of `classify` and is now stale.** `core.json`
+  records `validate_version` and says so. A re-baseline is a full sweep of ~555 calls
+  and needs a day with the free-tier budget clear.
 - **Risk grounding does not clearly pay for itself** (0.63 → 0.66, and that was
   measured on the wrong tier).
 - **`multi_problem` classification is stuck at 0.67.**

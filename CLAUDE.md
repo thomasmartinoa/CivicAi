@@ -32,7 +32,7 @@ it is where the known defects live.
 
 ```bash
 cd backend
-.venv/bin/python -m pytest -q                       # 798 tests, no network, no key, ~17s
+.venv/bin/python -m pytest -q                       # 809 tests, no network, no key, ~16s
 .venv/bin/python -m uvicorn app.main:app --reload   # API on :8000
 .venv/bin/python -m alembic upgrade head            # 5 migrations
 .venv/bin/python -m app.ai.rag.ingest --collection all   # build the FAISS indexes
@@ -123,16 +123,18 @@ day and leaves little over. `--flash-only` keeps a sweep off the strong tier.
 
 ## Testing
 
-798 tests, no network, no API key, about seventeen seconds. Three things to know:
+809 tests, no network, no API key, about sixteen seconds. Three things to know:
 
 - **Fakes everywhere.** `FakeEmbedder` is content-hashed, so only *identical* text is
   similar under it — a similarity threshold tested with it is vacuous, which is why
   `tests/services/test_clustering.py` carries a small bag-of-words embedder instead.
-- **Every unit test passing does not mean the system works.** All four production
+- **Every unit test passing does not mean the system works.** All six production
   bugs this project has found came from live runs, never from the suite: retired
   model ids, no request timeout, `AgentRun.finished_at` landing before `started_at`,
-  and the rate limiter being bypassed by the provider client's own retries. Run
-  something real before trusting a change.
+  the rate limiter being bypassed by the provider client's own retries, a transient
+  503 permanently abandoning a complaint, and a resume that replayed the failed
+  node's cached error instead of retrying it. Run something real before trusting a
+  change.
 - **The eval harness is the other half of the test suite.** `app/evals/` measures
   what pytest cannot: whether retrieval helps, whether a threshold is right, whether
   a prompt change is an improvement or a trade. `docs/07-evaluation-and-observability.md`
