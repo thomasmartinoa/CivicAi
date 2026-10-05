@@ -233,33 +233,57 @@ export default function AdminDashboard() {
           {/* SLA & Escalations KPIs */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+              {/* From /admin/analytics: the compliance rate is null until something
+                  has completed, and null must not render as a number — 100% would
+                  claim a perfect record and 0% would claim a total failure, where
+                  the truth is that nothing has been measured. */}
               <p className="text-sm text-gray-500 mb-1">SLA Breach Rate</p>
-              <p className={`text-3xl font-bold ${perf.sla_breach_rate_percent > 20 ? 'text-red-600' : 'text-green-600'}`}>
-                {perf.sla_breach_rate_percent}%
+              {data?.sla_compliance_rate == null ? (
+                <p className="text-3xl font-bold text-gray-400">No data</p>
+              ) : (
+                <p className={`text-3xl font-bold ${(1 - data.sla_compliance_rate) > 0.2 ? 'text-red-600' : 'text-green-600'}`}>
+                  {((1 - data.sla_compliance_rate) * 100).toFixed(1)}%
+                </p>
+              )}
+              <p className="text-xs text-gray-400 mt-1">
+                {data?.sla_breached ?? 0} of {data?.sla_measured ?? 0} completed orders
               </p>
-              <p className="text-xs text-gray-400 mt-1">{perf.sla_breaches} of {perf.sla_total_measured} orders</p>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
-              <p className="text-sm text-gray-500 mb-1">Total Escalations</p>
-              <p className="text-3xl font-bold text-orange-600">{perf.total_escalations}</p>
+              {/* Escalation counts have no endpoint yet — see Phase 4a's
+                  carried-forward section. Median resolution is published, and is the
+                  more useful number on this row anyway. */}
+              <p className="text-sm text-gray-500 mb-1">Median Resolution</p>
+              {data?.median_resolution_hours == null ? (
+                <p className="text-3xl font-bold text-gray-400">No data</p>
+              ) : (
+                <p className="text-3xl font-bold text-orange-600">
+                  {data.median_resolution_hours.toFixed(1)}h
+                </p>
+              )}
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
               <p className="text-sm text-gray-500 mb-1">Contractors Active</p>
-              <p className="text-3xl font-bold text-blue-900">{perf.contractor_performance.length}</p>
+              <p className="text-3xl font-bold text-blue-900">{perf.contractors.length}</p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Avg Resolution Time by Category */}
-            {Object.keys(perf.avg_resolution_hours_by_category).length > 0 && (
+            {/* Resolution time by CATEGORY has no endpoint — the analytics route
+                publishes medians per contractor, not per category. Charting what is
+                actually measured rather than relabelling it. */}
+            {perf.contractors.some(c => c.median_hours != null) && (
               <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-                <h3 className="text-base font-semibold text-gray-800 mb-4">Avg Resolution Time (hours) by Category</h3>
+                <h3 className="text-base font-semibold text-gray-800 mb-4">Median Resolution Time (hours) by Contractor</h3>
                 <ResponsiveContainer width="100%" height={250}>
-                  <BarChart data={Object.entries(perf.avg_resolution_hours_by_category).map(([name, value]) => ({ name, value }))}>
+                  <BarChart data={perf.contractors
+                    .filter(c => c.median_hours != null)
+                    .map(c => ({ name: c.name, value: Number(c.median_hours!.toFixed(1)) }))}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="name" angle={-30} textAnchor="end" height={80} fontSize={11} />
                     <YAxis />
-                    <Tooltip formatter={(v) => [`${v}h`, 'Avg Hours']} />
+                    <Tooltip formatter={(v) => [`${v}h`, 'Median Hours']} />
                     <Bar dataKey="value" fill="#16a34a" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -267,23 +291,31 @@ export default function AdminDashboard() {
             )}
 
             {/* Contractor Performance Table */}
-            {perf.contractor_performance.length > 0 && (
+            {perf.contractors.length > 0 && (
               <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
                 <h3 className="text-base font-semibold text-gray-800 mb-4">Contractor Performance</h3>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200 text-left text-gray-500">
                       <th className="pb-2 font-medium">Contractor</th>
+                      <th className="pb-2 font-medium">Workload</th>
                       <th className="pb-2 font-medium">Completed</th>
-                      <th className="pb-2 font-medium">Avg Hours</th>
+                      <th className="pb-2 font-medium">Median Hours</th>
+                      <th className="pb-2 font-medium">Breached</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {perf.contractor_performance.map((c) => (
+                    {perf.contractors.map((c) => (
                       <tr key={c.contractor_id} className="border-b border-gray-100 hover:bg-gray-50">
                         <td className="py-2 text-gray-800">{c.name}</td>
-                        <td className="py-2 text-gray-600">{c.completed_orders}</td>
-                        <td className="py-2 text-gray-600">{c.avg_resolution_hours}h</td>
+                        <td className="py-2 text-gray-600">{c.active_workload}</td>
+                        <td className="py-2 text-gray-600">{c.completed}</td>
+                        {/* An em dash, not 0h: a crew that has completed nothing has
+                            no median, and 0 would read as instant work. */}
+                        <td className="py-2 text-gray-600">
+                          {c.median_hours == null ? '—' : `${c.median_hours.toFixed(1)}h`}
+                        </td>
+                        <td className={`py-2 ${c.breached > 0 ? 'text-red-600' : 'text-gray-600'}`}>{c.breached}</td>
                       </tr>
                     ))}
                   </tbody>

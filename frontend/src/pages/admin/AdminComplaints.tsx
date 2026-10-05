@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { getAdminComplaints, updateComplaint } from '../../services/api';
-import type { Complaint } from '../../types';
+import type { ComplaintRow } from '../../types';
 
 const statusColor: Record<string, string> = {
   submitted: 'bg-gray-100 text-gray-700',
@@ -38,11 +38,11 @@ export default function AdminComplaints() {
 
   const queryClient = useQueryClient();
 
-  const { data, isLoading, isError } = useQuery<Complaint[]>({
+  const { data, isLoading, isError } = useQuery<ComplaintRow[]>({
     queryKey: ['adminComplaints', params],
     queryFn: async () => {
       const res = await getAdminComplaints(params);
-      return res.data.complaints;
+      return res.data.items;  // the endpoint returns a page, not an array
     },
   });
 
@@ -149,7 +149,7 @@ export default function AdminComplaints() {
                     className="border-b border-gray-100 hover:bg-blue-50 cursor-pointer transition"
                   >
                     <td className="px-4 py-3 font-mono text-xs">{c.tracking_id}</td>
-                    <td className="px-4 py-3 max-w-xs truncate">{c.description}</td>
+                    <td className="px-4 py-3 max-w-xs truncate">{c.description_preview}</td>
                     <td className="px-4 py-3">{c.category || '-'}</td>
                     <td className={`px-4 py-3 ${riskColor[c.risk_level || ''] || ''}`}>{c.risk_level || '-'}</td>
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>

@@ -78,9 +78,19 @@ class EscalationSummary(BaseModel):
     escalated_at: datetime
 
 
+DESCRIPTION_PREVIEW_CHARS = 280
+
+
 class ComplaintRow(BaseModel):
     """One line in the officer's queue. Deliberately not the whole complaint: the
-    list is read at a glance and a hundred descriptions would make it unreadable."""
+    list is read at a glance and a hundred descriptions would make it unreadable.
+
+    `description_preview` is the one exception, because an officer triaging a queue
+    needs to see what the citizen actually said and a category alone does not tell
+    them. It is truncated — the detail endpoint carries the full text. This is the
+    authenticated surface, so unlike the public dashboard there is no reason to
+    withhold it.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -96,6 +106,7 @@ class ComplaintRow(BaseModel):
     created_at: datetime
     sla_state: str | None = None
     is_cluster: bool = False
+    description_preview: str | None = None
 
 
 class ComplaintPage(BaseModel):
@@ -162,6 +173,11 @@ class WorkOrderRow(BaseModel):
     cluster_size: int | None = None
     created_at: datetime
     completed_at: datetime | None = None
+    completion_photo: str | None = None
+    """The proof-of-work image, if one was ever attached. Published on the officer
+    surface because officers are authenticated; the public dashboard withholds all
+    media. Nothing writes this yet — the upload endpoint is deferred — so it is
+    null in practice and the officer screen must not gate completion on it."""
 
 
 class WorkOrderPage(BaseModel):

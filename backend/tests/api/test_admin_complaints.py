@@ -252,3 +252,34 @@ def test_the_list_does_not_query_once_per_complaint(client, db_session, officer,
         f"{len(statements)} selects for 12 rows — one per complaint means the "
         f"work order relationship is not being loaded eagerly:\n" + "\n".join(statements)
     )
+
+
+def test_the_queue_carries_a_truncated_description(client, db_session, officer, auth):
+    """An officer triaging a queue needs to see what the citizen actually said; a
+    category alone does not tell them. Truncated, because a queue row is a row."""
+    from app.schemas.admin import DESCRIPTION_PREVIEW_CHARS
+
+    long_text = "The drain is blocked. " * 60
+    db_session.add(Complaint(tracking_id="CIV-PREVIEW1", tenant_id=officer.tenant_id,
+                             citizen_email="a@b.com", description=long_text,
+                             category="WATER", status="assigned"))
+    db_session.commit()
+
+    row = next(r for r in client.get("/admin/complaints", headers=auth).json()["items"]
+               if r["tracking_id"] == "CIV-PREVIEW1")
+    preview = row["description_preview"]
+    assert preview.startswith("The drain is blocked.")
+    assert len(preview) <= DESCRIPTION_PREVIEW_CHARS + 1, "the ellipsis is the +1"
+    assert preview.endswith("…")
+    assert len(preview) < len(long_text)
+
+
+def test_a_short_description_is_not_given_an_ellipsis(client, db_session, officer, auth):
+    db_session.add(Complaint(tracking_id="CIV-PREVIEW2", tenant_id=officer.tenant_id,
+                             citizen_email="a@b.com", description="A pothole.",
+                             category="ROADS", status="assigned"))
+    db_session.commit()
+
+    row = next(r for r in client.get("/admin/complaints", headers=auth).json()["items"]
+               if r["tracking_id"] == "CIV-PREVIEW2")
+    assert row["description_preview"] == "A pothole."

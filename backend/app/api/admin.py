@@ -29,7 +29,8 @@ from app.db.models.complaint import Complaint
 from app.db.models.core import User
 from app.db.session import get_db
 from app.schemas.admin import (
-    AdminComplaintDetail, AnalyticsResponse, BriefingResponse, ComplaintPage, ComplaintRow,
+    DESCRIPTION_PREVIEW_CHARS, AdminComplaintDetail, AnalyticsResponse, BriefingResponse,
+    ComplaintPage, ComplaintRow,
     ComplaintUpdate, WorkOrderUpdate,
     ContractorRow, EmailDraftResponse, EscalationSummary, EvidenceCitation, LoginResponse,
     PerformanceResponse, TokenUser, WorkOrderPage, WorkOrderRow, WorkOrderSummary,
@@ -159,9 +160,16 @@ def list_complaints(
     items = []
     for complaint in rows:
         row = ComplaintRow.model_validate(complaint)
+        description = complaint.description or ""
         items.append(row.model_copy(update={
             "sla_state": _sla_state(complaint.work_order),
             "is_cluster": bool(complaint.cluster_id),
+            # Truncated here rather than in the browser, so a thousand-word
+            # description is not sent to render as two lines.
+            "description_preview": (
+                description[:DESCRIPTION_PREVIEW_CHARS].rstrip() + "…"
+                if len(description) > DESCRIPTION_PREVIEW_CHARS else description or None
+            ),
         }))
     return ComplaintPage(items=items, total=total, page=page, size=size,
                          pages=math.ceil(total / size) if total else 0)
@@ -279,6 +287,7 @@ def list_work_orders(
             cluster_size=order.cluster_size,
             created_at=order.created_at,
             completed_at=order.completed_at,
+            completion_photo=order.completion_photo,
         )
         for order in orders
     ]
@@ -631,5 +640,5 @@ def update_work_order(
         contractor_name=order.contractor.name if order.contractor else None,
         estimated_cost=order.estimated_cost, is_cluster=order.is_cluster,
         cluster_size=order.cluster_size, created_at=order.created_at,
-        completed_at=order.completed_at,
+        completed_at=order.completed_at, completion_photo=order.completion_photo,
     )
