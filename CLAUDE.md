@@ -25,21 +25,26 @@ it is where the known defects live.
 | 2b | Four nodes grounded with citations, `investigate` loop, case records, semantic cache, SLA monitor |
 | 2c | Semantic clustering, daily briefing, officer email draft, scheduled jobs |
 | 3 | Golden set, three-column eval, judges, regression gate, observability |
-| 4–6 | Officer ReAct agent (next), six frontend screens, polish and ADRs |
+| 4a | Officer auth, the complaint queue, work orders, analytics, briefing, email approval, citizen OTP + tokens, the public dashboard |
+| 4b–6 | Officer ReAct agent (next), six frontend screens, polish and ADRs |
 
 ## Commands
 
 ```bash
 cd backend
-.venv/bin/python -m pytest -q                       # 645 tests, no network, no key, ~10s
+.venv/bin/python -m pytest -q                       # 798 tests, no network, no key, ~17s
 .venv/bin/python -m uvicorn app.main:app --reload   # API on :8000
 .venv/bin/python -m alembic upgrade head            # 5 migrations
 .venv/bin/python -m app.ai.rag.ingest --collection all   # build the FAISS indexes
 .venv/bin/python -m app.evals.run --config all --flash-only --resume  # the eval sweep
 ```
 
-The frontend under `frontend/` is **still v1-era**: it calls nineteen endpoints,
-of which five exist. Do not trust it as a description of the API.
+The frontend under `frontend/` is **still v1-era**, but it now builds (`npm install
+&& npm run build`) and 18 of the 21 endpoints it calls exist. The three that do not
+are the citizen feedback loop, listed in Phase 4a's carried-forward section. Where it
+disagrees with the API, the API is right: its pipeline-stage names are v1's, and it
+sends an `email` query parameter to `/complaints/my` that the server deliberately
+ignores.
 
 ## Architecture
 
@@ -107,6 +112,7 @@ GEMINI_API_KEY=            # required for anything live
 GEMINI_MODEL=gemini-3.5-flash-lite     # model ids expire; a 404 on every node means check these
 GEMINI_MODEL_STRONG=gemini-3.5-flash
 LLM_REQUESTS_PER_SECOND=0.2            # the free tier allows 15 generate requests/minute/model
+LLM_MAX_RETRIES=0                      # provider-side retries bypass the rate limiter; see llm.py
 LLM_TIMEOUT_SECONDS=60                 # without it a stalled connection hangs a run forever
 BACKGROUND_JOBS_ENABLED=true           # SLA monitor, clustering, briefing, cases refresh
 ```
@@ -117,14 +123,16 @@ day and leaves little over. `--flash-only` keeps a sweep off the strong tier.
 
 ## Testing
 
-645 tests, no network, no API key, about ten seconds. Three things to know:
+798 tests, no network, no API key, about seventeen seconds. Three things to know:
 
 - **Fakes everywhere.** `FakeEmbedder` is content-hashed, so only *identical* text is
   similar under it — a similarity threshold tested with it is vacuous, which is why
   `tests/services/test_clustering.py` carries a small bag-of-words embedder instead.
-- **Every unit test passing does not mean the system works.** Both production bugs
-  found in the first live runs — retired model ids, and no request timeout — were
-  invisible to all of them. Run something real before trusting a change.
+- **Every unit test passing does not mean the system works.** All four production
+  bugs this project has found came from live runs, never from the suite: retired
+  model ids, no request timeout, `AgentRun.finished_at` landing before `started_at`,
+  and the rate limiter being bypassed by the provider client's own retries. Run
+  something real before trusting a change.
 - **The eval harness is the other half of the test suite.** `app/evals/` measures
   what pytest cannot: whether retrieval helps, whether a threshold is right, whether
   a prompt change is an improvement or a trade. `docs/07-evaluation-and-observability.md`

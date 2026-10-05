@@ -24,8 +24,6 @@ const PIPELINE_STAGES = [
   { key: 'resolved',    label: 'Resolved' },
 ];
 
-const STATUS_ORDER = ['submitted', 'validated', 'classified', 'routed', 'grouped', 'assigned', 'in_progress', 'escalated', 'resolved', 'closed'];
-
 function getStepIndex(status: string): number {
   const pipelineKeys = PIPELINE_STAGES.map(s => s.key);
   const idx = pipelineKeys.indexOf(status);
@@ -87,7 +85,7 @@ function ProgressTimeline({ status }: { status: string }) {
   );
 }
 
-function ComplaintCard({ c: initialC, expanded, onToggle }: { c: Complaint; expanded: boolean; onToggle: () => void }) {
+function ComplaintCard({ c: initialC, onToggle }: { c: Complaint; expanded: boolean; onToggle: () => void }) {
   const [c, setC] = useState<Complaint>(initialC);
   const stepDesc = STATUS_STEPS.find(s => s.key === c.status)?.desc || 'Processing';
   const images = (c.media || []).filter(m => m.media_type === 'image');

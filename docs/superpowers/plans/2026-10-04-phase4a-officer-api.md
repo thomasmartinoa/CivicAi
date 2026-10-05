@@ -339,3 +339,67 @@ the point of doing it last, with the real contract in hand rather than guessed a
 **Next:** Phase 4b — the officer ReAct agent, its tools and the SSE endpoint, built
 onto this surface. It needs model quota, so it is the right thing to do on a day when
 500 requests are available and the wrong thing to block a demo on.
+
+---
+
+## Carried forward from Phase 4a
+
+What was deliberately deferred, and the known defects. **Read this before Phase 4b.**
+
+### Endpoints the frontend wants that still do not exist
+
+Three, all of them the citizen feedback loop rather than the officer surface:
+
+| Endpoint | Why it was deferred |
+|---|---|
+| `POST /complaints/{id}/rate` | Satisfaction rating. `satisfaction_rating` and `satisfaction_comment` columns exist; nothing writes them. |
+| `POST /complaints/{id}/verify` | "Was it actually fixed?" `verified_fixed` exists; nothing writes it. |
+| `POST /admin/work-orders/{id}/completion-photo` | `completion_photo` exists. Needs the upload path *and* a decision about whether a completion photo is ever public — the public dashboard currently withholds all media. |
+
+They are a coherent feature (closing the loop with the citizen), not three odds and
+ends, and they belong with the frontend phase that will actually render them.
+
+### Defects found by running it live, now fixed — and what that implies
+
+Both were invisible to 795 passing tests:
+
+- `AgentRun.started_at` was left to the column default, which fires at INSERT, so
+  `finished_at` landed *before* `started_at` and any interval query read negative.
+- The Gemini client's `max_retries` bypassed the shared rate limiter, making a 429
+  storm self-amplifying. A `max_bucket_size` of 5 also broke the per-minute quota
+  on the first burst alone.
+
+The lesson is already in CLAUDE.md and is worth restating: **every unit test passing
+does not mean the system works.** Four of the four production bugs this project has
+found were found by running it, not by testing it.
+
+### Still unmeasured or unresolved
+
+- **The validator.** `validate` rejects 18 of 88 real complaints (precision 0.40).
+  `VALIDATE_V2` is written and registered; the A/B that would justify promoting it
+  was run on 2026-10-06 — see `docs/eval-reports/` for the outcome. Until `LATEST`
+  moves, the defect stands.
+- **Risk grounding does not clearly pay for itself** (0.63 → 0.66, and that was
+  measured on the wrong tier).
+- **`multi_problem` classification is stuck at 0.67.**
+- **1 in 6 prompt-injection items still moves its risk band.**
+- **Faithfulness is unmeasured.** Citations are checked for *shape*, never for
+  whether the cited chunk actually supports the sentence.
+- **Judge labels:** 20 hand labels per criterion are still needed. The CLI and the
+  artefact capture are built and waiting.
+
+### Smaller things a reader will trip over
+
+- **An officer cannot record *why* a status changed.** `PATCH /admin/complaints/{id}`
+  takes a status and nothing else, because the table has no officer-note column.
+  Adding one is a migration; it was written down rather than smuggled into an
+  existing field.
+- **`sla_state` is filtered in Python**, not SQL, since it depends on "now" against
+  each order's own window. The page cap bounds the cost. A tenant with a hundred
+  thousand orders needs the band precomputed on write.
+- **The frontend's `PIPELINE_STAGES`/alias map references statuses v2 never writes**
+  (`validated`, `classified`, `routed`, `grouped`). The tracking screen will render,
+  but its progress bar is describing v1's lifecycle.
+- **`/complaints/my` accepts and ignores an `email` query parameter.** Honouring it
+  would undo the OTP flow entirely. The ignore is tested; the frontend should stop
+  sending it.

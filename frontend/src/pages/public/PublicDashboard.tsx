@@ -35,7 +35,28 @@ const createCustomIcon = (color: string) => {
 };
 
 const PIE_COLORS = ['#1e3a5f', '#2563eb', '#16a34a', '#eab308', '#ef4444', '#8b5cf6', '#6b7280'];
-const CATEGORIES = ["Roads", "Electricity", "Water", "Sanitation", "Public Spaces", "Education", "Health", "Flooding", "Fire Hazard", "Construction", "Stray Animals", "Sewage"];
+// The wire value comes from the backend's Category enum; the label is for people.
+// The previous version held display names and uppercased them at call time, which
+// turned "Public Spaces" into "PUBLIC SPACES" where the API wants "PUBLIC_SPACES" —
+// so PUBLIC_SPACES, FIRE_HAZARD and STRAY_ANIMALS silently matched nothing.
+const CATEGORIES: { value: string; label: string }[] = [
+  { value: 'ROADS', label: 'Roads' },
+  { value: 'ELECTRICITY', label: 'Electricity' },
+  { value: 'WATER', label: 'Water' },
+  { value: 'SANITATION', label: 'Sanitation' },
+  { value: 'PUBLIC_SPACES', label: 'Public Spaces' },
+  { value: 'EDUCATION', label: 'Education' },
+  { value: 'HEALTH', label: 'Health' },
+  { value: 'FLOODING', label: 'Flooding' },
+  { value: 'FIRE_HAZARD', label: 'Fire Hazard' },
+  { value: 'CONSTRUCTION', label: 'Construction' },
+  { value: 'STRAY_ANIMALS', label: 'Stray Animals' },
+  { value: 'SEWAGE', label: 'Sewage' },
+];
+
+const CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
+  CATEGORIES.map(c => [c.value, c.label])
+);
 
 // Map updater component
 function MapUpdater({ markers, state, district }: { markers: any[], state: string, district: string }) {
@@ -81,7 +102,7 @@ export default function PublicDashboard() {
   const { data, isLoading, isError } = useQuery<DashboardStats>({
     queryKey: ['publicDashboard', selectedState, selectedDistrict, selectedCategory],
     queryFn: async () => {
-      const res = await getPublicDashboard(undefined, selectedState || undefined, selectedDistrict || undefined, selectedCategory ? selectedCategory.toUpperCase() : undefined);
+      const res = await getPublicDashboard(undefined, selectedState || undefined, selectedDistrict || undefined, selectedCategory || undefined);
       return res.data;
     },
     placeholderData: (prev) => prev,
@@ -140,6 +161,20 @@ export default function PublicDashboard() {
             <option value="">All Districts</option>
             {selectedState && STATE_DISTRICT_MAP[selectedState].map(district => (
               <option key={district} value={district}>{district}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex-1">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+          <select
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
+          >
+            <option value="">All Categories</option>
+            {CATEGORIES.map(category => (
+              <option key={category.value} value={category.value}>{category.label}</option>
             ))}
           </select>
         </div>
@@ -241,7 +276,7 @@ export default function PublicDashboard() {
       {/* Complaints List */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm mt-8">
         <h2 className="text-xl font-semibold text-gray-800 mb-6">
-          Latest Issues {selectedCategory ? `in ${selectedCategory}` : ''}
+          Latest Issues {selectedCategory ? `in ${CATEGORY_LABELS[selectedCategory] ?? selectedCategory}` : ''}
         </h2>
         {data?.recent_complaints && data.recent_complaints.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
