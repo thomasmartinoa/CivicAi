@@ -53,20 +53,31 @@ export interface Contractor {
 export interface DashboardStats {
   total_complaints: number;
   resolved_complaints: number;
-  resolution_rate: number;
+  /** null when nothing has been filed. The API deliberately does not send 0, because
+   *  0% reads as a municipality that resolves nothing rather than one with nothing to
+   *  resolve, so this must render as "No data" and never as a number. */
+  resolution_rate: number | null;
   by_category: Record<string, number>;
   by_status: Record<string, number>;
-  heatmap_data: Array<{ lat: number; lng: number; category: string; status: string; risk_level: string | null; color: string }>;
+  /** A coarsened grid cell, not a complaint. The coordinates are rounded to about
+   *  110 m before grouping, and `weight` is how many complaints fell in the cell —
+   *  the public API never exposes a single complaint's exact position. */
+  heatmap_data: Array<{ lat: number; lng: number; weight: number; category: string | null }>;
+  /** What a stranger may see. `description`, `address` and `citizen_name` are NOT
+   *  here: the public endpoint withholds them on purpose, because a complaint
+   *  description is unreviewed free text about a real street and a place plus a date
+   *  is often a household. `media_url` is always null until a moderation step exists.
+   *  See backend/app/schemas/public.py for the full list of exclusions. */
   recent_complaints: Array<{
     id: string;
-    description: string;
-    category: string;
+    category: string | null;
     status: string;
-    address: string;
+    risk_level: string | null;
+    district: string | null;
+    state: string | null;
     created_at: string;
-    risk_level: string;
+    resolved: boolean;
     media_url: string | null;
-    citizen_name: string | null;
   }>;
 }
 

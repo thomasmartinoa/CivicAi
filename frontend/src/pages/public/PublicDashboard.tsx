@@ -76,6 +76,8 @@ function MapUpdater({ markers, state, district }: { markers: any[], state: strin
   return null;
 }
 
+// Still used on the recent-complaints cards, where risk_level IS published. It is
+// no longer used on the map: a heatmap point is a grid cell and carries no risk.
 const RISK_COLOR: Record<string, string> = {
   critical: '#ef4444',
   high: '#f97316',
@@ -83,9 +85,15 @@ const RISK_COLOR: Record<string, string> = {
   low: '#22c55e',
 };
 
-function getRiskColor(riskLevel: string | null | undefined, status: string) {
-  if (status === 'resolved' || status === 'closed') return '#22c55e';
-  return RISK_COLOR[riskLevel || 'medium'] || '#eab308';
+/** A heatmap point is a coarsened grid cell, not a complaint: the public API sends
+ *  lat/lng/weight/category and deliberately no status or risk level, because those
+ *  belong to individual reports. Colouring by category is therefore the most the
+ *  map can honestly say, and the marker grows with how many complaints fell in the
+ *  cell. */
+function getCategoryColor(category: string | null): string {
+  if (!category) return '#6b7280';
+  const index = CATEGORIES.findIndex(c => c.value === category);
+  return index === -1 ? '#6b7280' : PIE_COLORS[index % PIE_COLORS.length];
 }
 
 
@@ -224,7 +232,7 @@ export default function PublicDashboard() {
           <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm flex-1 flex flex-col justify-center">
             <p className="text-sm text-gray-500 mb-1">Resolution Rate</p>
             <p className="text-4xl font-bold text-purple-600">
-              {(data?.resolution_rate || 0).toFixed(1)}%
+              {data?.resolution_rate == null ? 'No data' : `${(data.resolution_rate * 100).toFixed(1)}%`}
             </p>
           </div>
         </div>
@@ -258,12 +266,14 @@ export default function PublicDashboard() {
               <Marker
                 key={i}
                 position={[marker.lat, marker.lng]}
-                icon={createCustomIcon(getRiskColor(marker.risk_level, marker.status))}
+                icon={createCustomIcon(getCategoryColor(marker.category))}
               >
                 <Popup>
                   <div className="text-sm font-semibold mb-1">{marker.category || 'Unknown'}</div>
-                  <div className="text-xs text-gray-600 capitalize">Status: {marker.status}</div>
-                  {marker.risk_level && <div className="text-xs text-gray-500 capitalize">Risk: {marker.risk_level}</div>}
+                  <div className="text-xs text-gray-600">
+                    {marker.weight === 1 ? '1 complaint' : `${marker.weight} complaints`} in this area
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">Location shown to the nearest ~100 m</div>
                 </Popup>
               </Marker>
             ))}
@@ -297,9 +307,18 @@ export default function PublicDashboard() {
                       {c.status}
                     </span>
                   </div>
-                  <p className="text-sm text-gray-800 font-medium mb-3 line-clamp-2">{c.description}</p>
+                  {c.risk_level && (
+                    <p className="text-sm font-medium mb-3 capitalize"
+                       style={{ color: RISK_COLOR[c.risk_level] ?? '#374151' }}>
+                      {c.risk_level} risk
+                    </p>
+                  )}
                   <div className="text-xs text-gray-500 space-y-1">
-                    <p className="flex items-start gap-1">📍 <span>{c.address || 'Location not specified'}</span></p>
+                    {/* District and state, never the street: the public API withholds
+                        the address, because a place plus a date is often a household. */}
+                    <p className="flex items-start gap-1">📍 <span>
+                      {[c.district, c.state].filter(Boolean).join(', ') || 'Location not specified'}
+                    </span></p>
                     <p className="flex items-center gap-1">📅 <span>{new Date(c.created_at).toLocaleDateString()}</span></p>
                   </div>
                 </div>
