@@ -7,7 +7,7 @@ from app.ai.prompts import LATEST, PROMPT_REGISTRY, get_prompt
 def test_every_expected_prompt_is_registered():
     assert set(LATEST) == {"validate", "classify", "investigate", "assess_risk",
                            "vision", "work_order", "work_order_cluster", "briefing",
-                           "email_draft", "judge"}
+                           "email_draft", "judge", "officer_chat"}
 
 
 def test_get_prompt_returns_the_latest_version_by_default():
@@ -66,8 +66,20 @@ def test_classify_prompt_renders_with_untrusted_text_without_breaking():
 
 
 def test_every_registered_prompt_renders_from_its_declared_variables():
+    """A string fills an ordinary variable, but a MessagesPlaceholder wants a list of
+    messages — officer_chat has one, and filling it with "x" raises rather than
+    rendering. The filler has to match what each variable actually accepts, or this
+    test only covers the templates that happen to be simple."""
+    from langchain_core.messages import HumanMessage
+    from langchain_core.prompts import MessagesPlaceholder
+
     for (name, version), template in PROMPT_REGISTRY.items():
-        filler = {var: "x" for var in template.input_variables}
+        placeholders = {m.variable_name for m in template.messages
+                        if isinstance(m, MessagesPlaceholder)}
+        filler = {
+            var: [HumanMessage("x")] if var in placeholders else "x"
+            for var in template.input_variables
+        }
         messages = template.format_messages(**filler)
         assert messages, f"{name}/{version} rendered nothing"
 

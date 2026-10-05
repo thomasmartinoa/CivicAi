@@ -8,7 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from app.ai.prompts.templates import (
     ASSESS_RISK_V1, ASSESS_RISK_V2, BRIEFING_V1, CLASSIFY_V1, CLASSIFY_V2,
-    EMAIL_DRAFT_V1, JUDGE_V1, INVESTIGATE_V1, VALIDATE_V1,
+    EMAIL_DRAFT_V1, JUDGE_V1, INVESTIGATE_V1, OFFICER_CHAT_V1, VALIDATE_V1,
     VALIDATE_V2, VISION_V1, WORK_ORDER_CLUSTER_V1, WORK_ORDER_V1,
 )
 
@@ -26,6 +26,7 @@ PROMPT_REGISTRY: dict[tuple[str, str], ChatPromptTemplate] = {
     ("vision", "v1"): VISION_V1,
     ("work_order", "v1"): WORK_ORDER_V1,
     ("work_order_cluster", "v1"): WORK_ORDER_CLUSTER_V1,
+    ("officer_chat", "v1"): OFFICER_CHAT_V1,
 }
 
 # The version each node uses unless told otherwise.
@@ -47,6 +48,7 @@ LATEST: dict[str, str] = {
     "vision": "v1",
     "work_order": "v1",
     "work_order_cluster": "v1",
+    "officer_chat": "v1",
 }
 
 
