@@ -103,3 +103,51 @@ def test_nothing_outside_evals_imports_evals():
         if any(name.startswith("app.evals") for name in _imports_in(path)):
             offenders.append(str(path.relative_to(APP)))
     assert not offenders, f"app/evals must not be imported by the application: {offenders}"
+
+
+def test_no_officer_tool_accepts_a_tenant_parameter():
+    """The agent must not be able to name a tenant.
+
+    `build_officer_tools` binds the authenticated officer's tenant in a closure, so
+    no tool has a parameter an LLM could fill with somebody else's id. That holds
+    only until someone adds one, and the signature is the whole security model — the
+    agent's context carries complaint text written by members of the public, and
+    Phase 3 measured that 1 in 6 prompt-injection items still moves a risk band.
+
+    This checks the source rather than the built tools, so it fails on a helper that
+    is not yet wired into the returned list.
+    """
+    import ast
+    from pathlib import Path
+
+    tools_dir = Path(__file__).resolve().parents[1] / "app" / "ai" / "tools"
+    offenders = []
+    for path in tools_dir.rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            # build_officer_tools takes it deliberately; it is the binding point.
+            if node.name.startswith("build_"):
+                continue
+            args = node.args
+            names = [a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+            for name in names:
+                if "tenant" in name:
+                    offenders.append(f"{path.name}:{node.name}({name})")
+    assert not offenders, f"tools must not take a tenant: {offenders}"
+
+
+def test_tools_do_not_import_the_api_layer():
+    """Same rule as the rest of app/ai: the AI system must run from a script or a
+    pytest with no HTTP layer."""
+    from pathlib import Path
+
+    tools_dir = Path(__file__).resolve().parents[1] / "app" / "ai" / "tools"
+    offenders = [
+        f"{path.name}: {name}"
+        for path in tools_dir.rglob("*.py")
+        for name in _imports_in(path)
+        if name.startswith("app.api")
+    ]
+    assert not offenders, f"app/ai/tools must not import app/api: {offenders}"
