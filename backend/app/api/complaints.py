@@ -6,6 +6,7 @@ and a citizen should not wait for them. What v1 lacked was durability, which
 Phase 1b's checkpointer and this phase's resume sweep supply.
 """
 
+import logging
 import secrets
 import string
 from pathlib import Path
@@ -14,15 +15,21 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db.models.complaint import Complaint, ComplaintMedia
 from app.db.session import get_db
-from app.schemas.complaint import ComplaintDetail, ComplaintSubmitted
+from app.schemas.complaint import (
+    ComplaintDetail, ComplaintSubmitted, OtpRequest, OtpRequested, OtpVerification,
+    VerifiedComplaints,
+)
 from app.services import media as media_module
 from app.services.execution import schedule_complaint_run
 from app.services.media import (
     MAX_UPLOAD_BYTES, MediaTooLarge, MediaTypeNotAllowed, StoredMedia, store_upload,
 )
 from app.services.tenancy import NoTenantConfigured, resolve_tenant_id
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/complaints", tags=["complaints"])
 
@@ -147,3 +154,80 @@ async def complaint_updates(websocket: WebSocket, tracking_id: str) -> None:
         # behind — the registry only prunes dead sockets when it next
         # publishes, and a finished complaint never publishes again.
         registry.disconnect(tracking_id, websocket)
+
+
+# ── citizen self-service: email and OTP ─────────────────────────────────────
+#
+# A citizen has no account. The only thing tying them to a complaint is the email
+# address they filed it under, so reading their own history means proving they
+# control that address. Everything in app/services/otp.py is about the ways that
+# could leak; these two routes exist to not add any more.
+
+
+@router.post("/verify-email", response_model=OtpRequested)
+def request_otp(payload: OtpRequest, db: Annotated[Session, Depends(get_db)]) -> OtpRequested:
+    """Email a one-time code to the address, if it has complaints.
+
+    **The response is identical whether or not it does.** Telling the caller would
+    turn this into a way to ask "has this person complained?", which for a
+    municipality is a question about somebody's dealings with the state. Nothing is
+    sent to an address with no complaints, and the caller cannot tell.
+
+    Rate limiting also answers identically: a caller who has exhausted their codes
+    learns nothing, and the citizen's inbox is protected either way.
+    """
+    from app.services.notify import _send_email
+    from app.services.otp import OtpRateLimited, complaints_for, issue_code
+
+    same_answer = OtpRequested(
+        message="If that address has complaints, a code is on its way. It expires in "
+                f"{settings.otp_expire_minutes} minutes."
+    )
+
+    if not complaints_for(db, payload.email):
+        logger.info("OTP requested for an address with no complaints")
+        return same_answer
+
+    try:
+        issued = issue_code(db, payload.email)
+    except OtpRateLimited:
+        logger.info("OTP request refused by the rate limit")
+        return same_answer
+
+    try:
+        _send_email(
+            payload.email.strip().lower(),
+            "CivicAI — your verification code",
+            f"Your code is {issued.code}. It expires in "
+            f"{settings.otp_expire_minutes} minutes.\n\n"
+            "If you did not ask for this, you can ignore it.",
+        )
+    except Exception:
+        # The code is already issued and usable; a dead SMTP relay is an operational
+        # problem, not a reason to tell the caller anything different.
+        logger.warning("could not send an OTP email", exc_info=True)
+
+    return same_answer
+
+
+@router.post("/verify-otp", response_model=VerifiedComplaints)
+def verify_otp(
+    payload: OtpVerification,
+    db: Annotated[Session, Depends(get_db)],
+) -> VerifiedComplaints:
+    """Exchange a correct code for that address's complaints.
+
+    A wrong code and an address that was never sent one give the same 401, for the
+    same reason the request endpoint gives one answer.
+    """
+    from app.services.otp import complaints_for, verify_code
+
+    if not verify_code(db, payload.email, payload.code):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="That code is not valid")
+
+    complaints = complaints_for(db, payload.email)
+    return VerifiedComplaints(
+        email=payload.email.strip().lower(),
+        complaints=[ComplaintDetail.model_validate(c) for c in complaints],
+    )

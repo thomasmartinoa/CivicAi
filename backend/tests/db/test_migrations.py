@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect
 BACKEND = Path(__file__).resolve().parents[2]
 
 EXPECTED_TABLES = {
-    "tenants", "users", "departments", "contractors",
+    "tenants", "users", "departments", "contractors", "citizen_otps",
     "complaints", "complaint_media",
     "work_orders", "escalations", "notifications", "daily_briefings",
     "agent_runs", "agent_steps", "retrieved_chunks", "documents", "document_chunks",

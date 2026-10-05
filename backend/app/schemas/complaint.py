@@ -37,3 +37,24 @@ class ComplaintDetail(BaseModel):
     created_at: datetime
     updated_at: datetime
     media: list[MediaSummary] = []
+
+
+class OtpRequest(BaseModel):
+    email: str
+
+
+class OtpRequested(BaseModel):
+    """Deliberately contentless. The same message comes back whether the address has
+    complaints, has none, or has asked too often — see the route's docstring."""
+
+    message: str
+
+
+class OtpVerification(BaseModel):
+    email: str
+    code: str
+
+
+class VerifiedComplaints(BaseModel):
+    email: str
+    complaints: list[ComplaintDetail] = []
