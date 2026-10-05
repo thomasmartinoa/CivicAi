@@ -141,9 +141,19 @@ day and leaves little over. `--flash-only` keeps a sweep off the strong tier.
 ## Where the known defects are
 
 `docs/07-evaluation-and-observability.md` §5 and the carried-forward sections of the
-phase plans. The one that matters most today: **`validate` rejects 18 of 88 real
-complaints** (invalid-complaint precision 0.40) to catch all 12 junk ones. `VALIDATE_V2`
-is written and registered but not yet the default, pending an A/B measurement.
+phase plans.
+
+**`validate` is on v2 as of 2026-10-06.** The A/B
+(`docs/eval-reports/2026-10-06-validate-v1-vs-v2.md`) was a trade, not a clean win:
+over n=40, v1 wrongly rejected 9 real complaints and admitted no junk; v2 wrongly
+rejects 3 and admits 1. It was promoted on the judgement that a terminal rejection
+with no appeal path costs a citizen far more than a junk row costs an officer. v1
+stays registered so the comparison is repeatable.
+
+**The core baseline is stale as a result.** macro-F1 0.93 was measured with v1 in
+front of `classify`, and v2 admits a slightly harder population. `core.json` records
+`validate_version` and says so. A re-baseline is a full sweep (~555 calls) and needs a
+day with the budget free.
 
 ## Conventions
 

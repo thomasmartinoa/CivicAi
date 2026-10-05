@@ -2,5 +2,6 @@
   "macro_f1": 0.93,
   "dataset_hash": "2521c86d94a7b86c7ef32a45918bb32de78762dfc396ffc7379fff7f5c30fb34",
   "git_sha": "f385089b66faba88cfea57776b332c4a7a6cfdf9",
-  "note": "First complete three-column sweep, 2026-10-04: full macro-F1 0.93 over n=70 classified items. Measured with --flash-only, so assess_risk ran on the flash tier rather than the strong tier production uses; the classification metrics this gate watches are unaffected, since classify is on the flash tier either way."
+  "note": "First complete three-column sweep, 2026-10-04: full macro-F1 0.93 over n=70 classified items. Measured with --flash-only, so assess_risk ran on the flash tier rather than the strong tier production uses; the classification metrics this gate watches are unaffected, since classify is on the flash tier either way. STALE AS OF 2026-10-06: measured with validate v1, and LATEST is now v2. v2 admits roughly six more real complaints per forty, so classify and assess_risk see a different and slightly harder population than this number was computed over. A re-baseline is a full sweep (~555 calls) and did not fit in the day's remaining free-tier budget. Until it is rerun, treat a regression against this figure as possibly a population change rather than a model change \u2014 and do not treat an improvement against it as evidence of anything.",
+  "validate_version": "v1"
 }

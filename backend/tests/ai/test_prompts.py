@@ -214,3 +214,33 @@ def test_both_validate_versions_stay_registered():
 
     assert ("validate", "v1") in PROMPT_REGISTRY
     assert ("validate", "v2") in PROMPT_REGISTRY
+
+
+def test_validate_is_on_v2_and_v1_is_still_registered():
+    """v2 was promoted on 2026-10-06 after an A/B that was explicitly a trade: over
+    n=40, v1 wrongly rejected 9 real complaints and admitted no junk, v2 rejects 3
+    and admits 1. The judgement was that a terminal rejection with no appeal path
+    costs a citizen far more than a junk row costs an officer.
+
+    v1 stays registered because it is the other arm of that comparison; deleting it
+    would make the decision unrepeatable.
+    """
+    from app.ai.prompts import LATEST, PROMPT_REGISTRY
+
+    assert LATEST["validate"] == "v2"
+    assert ("validate", "v1") in PROMPT_REGISTRY
+    assert ("validate", "v2") in PROMPT_REGISTRY
+
+
+def test_the_core_baseline_records_which_validator_it_was_measured_under():
+    """Changing the validator changes the population reaching classify, so a
+    macro-F1 compared across that change is comparing two different things. The
+    baseline has to say which validator produced it or the gate lies quietly."""
+    import json
+    from pathlib import Path
+
+    baseline = json.loads(
+        (Path(__file__).resolve().parents[1] / ".." / "app" / "evals" / "baselines"
+         / "core.json").read_text()
+    )
+    assert "validate_version" in baseline

@@ -30,7 +30,14 @@ PROMPT_REGISTRY: dict[tuple[str, str], ChatPromptTemplate] = {
 
 # The version each node uses unless told otherwise.
 LATEST: dict[str, str] = {
-    "validate": "v1",
+    # v2 since 2026-10-06. The A/B (docs/eval-reports/2026-10-06-validate-v1-vs-v2.md)
+    # was a trade and not a clean win: over n=40, v1 wrongly rejected 9 real
+    # complaints and admitted no junk, v2 wrongly rejects 3 and admits 1. It was
+    # promoted on the judgement that a terminal rejection with no appeal path costs a
+    # citizen far more than a junk row costs an officer, NOT on the numbers alone —
+    # v1 is better on junk precision and stays registered so the comparison is
+    # repeatable.
+    "validate": "v2",
     "briefing": "v1",
     "email_draft": "v1",
     "judge": "v1",
