@@ -45,7 +45,11 @@ class Settings(BaseSettings):
     # generate requests per minute per model. The old default of 0.5 was 30 a
     # minute and produced 429s inside the first minute of an eval sweep.
     llm_requests_per_second: float = 0.2
-    llm_max_retries: int = 3
+    llm_max_retries: int = 0
+    """Retries inside the provider's own client, which bypass the shared rate
+    limiter. 0 by default so every HTTP request is one the limiter allowed — the
+    gated retry lives on the chain (`.with_retry`) instead. Raising this reintroduces
+    ungated traffic and, on a quota-limited tier, makes a 429 storm self-amplifying."""
     # A stalled connection must fail rather than hang. Without this an eval sweep
     # sat on one request for five minutes with no response and no retry, and a
     # complaint's background run would have waited for ever -- never completing and

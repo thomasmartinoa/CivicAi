@@ -208,3 +208,39 @@ def test_the_timeout_is_long_enough_for_a_slow_model_but_not_forever():
     from app.config import settings
 
     assert 20 <= settings.llm_timeout_seconds <= 180
+
+
+def test_the_shared_limiter_does_not_allow_a_burst_over_the_sustained_rate():
+    """A bucket larger than 1 let that many requests go instantly and then
+    throttled, which put the first minute over the free tier's 15/minute even with
+    no retries at all."""
+    from app.ai.llm import SHARED_RATE_LIMITER
+
+    assert SHARED_RATE_LIMITER.max_bucket_size == 1
+
+
+def test_the_provider_client_does_not_retry_behind_the_limiter():
+    """The Gemini client's own max_retries retries underneath LangChain, so those
+    attempts are real HTTP requests the limiter never sees. With it set, a 429 storm
+    amplified itself: every rejection for being too frequent produced more traffic.
+    A validator A/B run spent most of its budget that way.
+    """
+    from app.config import Settings
+
+    assert Settings().llm_max_retries == 0, (
+        "a non-zero default reintroduces ungated traffic"
+    )
+
+
+def test_a_built_gemini_client_carries_the_limiter_and_no_ungated_retries(monkeypatch):
+    """The two settings have to arrive on the actual client, not just in config."""
+    pytest.importorskip("langchain_google_genai")
+    from app.ai.llm import SHARED_RATE_LIMITER, Task, _build_one
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key-not-used")
+    monkeypatch.setattr(settings, "llm_max_retries", 0)
+
+    model = _build_one("gemini", Task.VALIDATE)
+    assert model.rate_limiter is SHARED_RATE_LIMITER
+    assert model.max_retries == 0

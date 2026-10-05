@@ -76,16 +76,26 @@ TASK_MODEL: dict[Task, str] = {
 # per-node `RetryPolicy(max_attempts=3)` can never fire for a chain failure —
 # it only covers a node raising for some other reason. The retry that actually
 # matters lives on the chain itself, via `.with_retry(stop_after_attempt=3)` in
-# `build_structured` below. That stacks with `max_retries=3` on the Gemini
-# client, so a single call can retry up to 9 times, each attempt queued behind
-# this one shared 0.5 rps bucket. That value is tuned for Phase 3's eval sweep,
-# not for a live demo: a single complaint passing through ~5 LLM nodes can
-# spend well over 10s waiting in this limiter across retries. Re-check this
-# against the actual Gemini free-tier RPM before any live demo.
+# `build_structured` below, and that one re-invokes the whole gated runnable, so
+# each of its attempts passes through this limiter.
+#
+# The Gemini client's own `max_retries` does NOT. It retries underneath LangChain,
+# so those attempts are real HTTP requests that the limiter never sees. That made a
+# 429 storm self-amplifying: the free tier allows 15 requests/minute/model, one
+# gated call could fire four ungated ones, and every 429 produced more traffic
+# rather than less. A validator A/B run spent most of its budget on retries of
+# requests that were rejected for being too frequent. It is 0 here by default so
+# that **every** HTTP request this process makes is one the limiter let through.
+#
+# `max_bucket_size` is 1 for the same reason: a bucket of 5 let five requests go
+# instantly and then throttled, which on top of the sustained rate put the first
+# minute over the quota even with no retries at all.
+_RETRY_SAFE_BUCKET = 1
+
 SHARED_RATE_LIMITER = InMemoryRateLimiter(
     requests_per_second=settings.llm_requests_per_second,
     check_every_n_seconds=0.1,
-    max_bucket_size=5,
+    max_bucket_size=_RETRY_SAFE_BUCKET,
 )
 
 
