@@ -28,8 +28,9 @@ from app.db.models.complaint import Complaint
 from app.db.models.core import User
 from app.db.session import get_db
 from app.schemas.admin import (
-    AdminComplaintDetail, ComplaintPage, ComplaintRow, EscalationSummary,
-    EvidenceCitation, LoginResponse, TokenUser, WorkOrderSummary,
+    AdminComplaintDetail, AnalyticsResponse, ComplaintPage, ComplaintRow, ContractorRow,
+    EscalationSummary, EvidenceCitation, LoginResponse, PerformanceResponse, TokenUser,
+    WorkOrderPage, WorkOrderRow, WorkOrderSummary,
 )
 from app.services.auth import create_access_token, verify_password
 
@@ -229,3 +230,120 @@ def complaint_detail(
         media=[{"file_path": m.file_path, "media_type": m.media_type,
                 "original_filename": m.original_filename} for m in complaint.media],
     )
+
+
+@router.get("/work-orders", response_model=WorkOrderPage)
+def list_work_orders(
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+    status_: Annotated[str | None, Query(alias="status")] = None,
+    sla_state: Annotated[str | None, Query(description="on_track|warning|urgent|breached")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 25,
+) -> WorkOrderPage:
+    """Dispatched work, closest to its deadline first.
+
+    `sla_state` is filtered in Python rather than SQL because it depends on "now"
+    against each order's own window, which no index can help with. The page is
+    capped, so the cost is bounded; a tenant with a hundred thousand orders would
+    need the band precomputed on write, and that is a change to make when the number
+    hurts rather than before.
+    """
+    from app.db.models.workflow import WorkOrder
+
+    if not officer.tenant_id:
+        return WorkOrderPage(items=[], total=0, page=page, size=size, pages=0)
+
+    query = (db.query(WorkOrder)
+             .filter(WorkOrder.tenant_id == officer.tenant_id)
+             .options(selectinload(WorkOrder.complaint), selectinload(WorkOrder.contractor)))
+    if status_:
+        query = query.filter(WorkOrder.status == status_)
+
+    orders = query.order_by(WorkOrder.sla_deadline.asc().nullslast()).all()
+    rows = [
+        WorkOrderRow(
+            id=order.id,
+            complaint_id=order.complaint_id,
+            tracking_id=order.complaint.tracking_id if order.complaint else "unknown",
+            category=order.complaint.category if order.complaint else None,
+            risk_level=order.complaint.risk_level if order.complaint else None,
+            status=order.status,
+            sla_hours=order.sla_hours,
+            sla_deadline=order.sla_deadline,
+            sla_state=_sla_state(order),
+            contractor_name=order.contractor.name if order.contractor else None,
+            estimated_cost=order.estimated_cost,
+            is_cluster=order.is_cluster,
+            cluster_size=order.cluster_size,
+            created_at=order.created_at,
+            completed_at=order.completed_at,
+        )
+        for order in orders
+    ]
+    if sla_state:
+        rows = [r for r in rows if r.sla_state == sla_state]
+
+    total = len(rows)
+    start = (page - 1) * size
+    return WorkOrderPage(items=rows[start:start + size], total=total, page=page, size=size,
+                         pages=math.ceil(total / size) if total else 0)
+
+
+@router.get("/contractors", response_model=PerformanceResponse)
+def list_contractors(
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> PerformanceResponse:
+    """Every crew in the tenant, busiest first, including the idle ones — an officer
+    choosing who to assign needs to see those most of all."""
+    from app.services.analytics import contractor_performance
+
+    if not officer.tenant_id:
+        return PerformanceResponse()
+    return PerformanceResponse(contractors=[
+        ContractorRow(**vars(row))
+        for row in contractor_performance(db, tenant_id=officer.tenant_id)
+    ])
+
+
+@router.get("/analytics", response_model=AnalyticsResponse)
+def analytics(
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> AnalyticsResponse:
+    """The dashboard figures. Every one is computed in services/analytics.py, where
+    they are tested against a fixture with known values."""
+    from app.services.analytics import complaint_counts, resolution_stats, sla_compliance
+
+    if not officer.tenant_id:
+        return AnalyticsResponse(total_complaints=0)
+
+    counts = complaint_counts(db, tenant_id=officer.tenant_id)
+    resolution = resolution_stats(db, tenant_id=officer.tenant_id)
+    compliance = sla_compliance(db, tenant_id=officer.tenant_id)
+    return AnalyticsResponse(
+        total_complaints=counts.total,
+        by_status=counts.by_status,
+        by_category=counts.by_category,
+        by_risk_level=counts.by_risk_level,
+        completed_work_orders=resolution.completed,
+        median_resolution_hours=resolution.median_hours,
+        mean_resolution_hours=resolution.mean_hours,
+        fastest_resolution_hours=resolution.fastest_hours,
+        slowest_resolution_hours=resolution.slowest_hours,
+        sla_measured=compliance.measured,
+        sla_met=compliance.met,
+        sla_breached=compliance.breached,
+        sla_compliance_rate=compliance.rate,
+    )
+
+
+@router.get("/analytics/performance", response_model=PerformanceResponse)
+def analytics_performance(
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> PerformanceResponse:
+    """The same shape as /contractors. The frontend calls both; they are one view of
+    the data and keeping them identical is cheaper than explaining a difference."""
+    return list_contractors(officer, db)

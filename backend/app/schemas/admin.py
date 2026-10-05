@@ -139,3 +139,71 @@ class AdminComplaintDetail(BaseModel):
     evidence: list[EvidenceCitation] = []
     work_order: WorkOrderSummary | None = None
     escalations: list[EscalationSummary] = []
+
+
+class WorkOrderRow(BaseModel):
+    """One line in the work-order list: the complaint it belongs to, who has it, and
+    how close it is to its deadline."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    complaint_id: str
+    tracking_id: str
+    category: str | None = None
+    risk_level: str | None = None
+    status: str
+    sla_hours: int | None = None
+    sla_deadline: datetime | None = None
+    sla_state: str
+    contractor_name: str | None = None
+    estimated_cost: float | None = None
+    is_cluster: bool = False
+    cluster_size: int | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
+class WorkOrderPage(BaseModel):
+    items: list[WorkOrderRow]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+class ContractorRow(BaseModel):
+    """A crew, with what they have done. Every per-contractor figure can be None:
+    a contractor who has completed nothing has no median resolution time, and
+    reporting 0 hours would read as instant work."""
+
+    contractor_id: str
+    name: str
+    specializations: list[str] = []
+    rating: float | None = None
+    active_workload: int = 0
+    completed: int = 0
+    median_hours: float | None = None
+    breached: int = 0
+
+
+class AnalyticsResponse(BaseModel):
+    total_complaints: int
+    by_status: dict[str, int] = {}
+    by_category: dict[str, int] = {}
+    by_risk_level: dict[str, int] = {}
+    completed_work_orders: int = 0
+    median_resolution_hours: float | None = None
+    mean_resolution_hours: float | None = None
+    fastest_resolution_hours: float | None = None
+    slowest_resolution_hours: float | None = None
+    sla_measured: int = 0
+    sla_met: int = 0
+    sla_breached: int = 0
+    sla_compliance_rate: float | None = None
+    """None when nothing has completed. The frontend must render that as "no data"
+    and not as 0%."""
+
+
+class PerformanceResponse(BaseModel):
+    contractors: list[ContractorRow] = []
