@@ -207,3 +207,33 @@ class AnalyticsResponse(BaseModel):
 
 class PerformanceResponse(BaseModel):
     contractors: list[ContractorRow] = []
+
+
+class BriefingResponse(BaseModel):
+    """The officer's morning briefing.
+
+    `is_fallback` is in the response, not just the table. v1's briefing served
+    template text for the life of the project because nothing surfaced that the
+    model had never run — the flag has to reach the screen or it may as well not
+    exist.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    brief_date: datetime
+    narrative: str
+    is_fallback: bool
+    new_complaints: int = 0
+    resolved_today: int = 0
+    sla_at_risk: int = 0
+    escalations_today: int = 0
+    clusters_detected: int = 0
+    created_at: datetime
+
+
+class EmailDraftResponse(BaseModel):
+    complaint_id: str
+    tracking_id: str
+    department: str | None = None
+    draft: str | None = None
+    approved: bool = False

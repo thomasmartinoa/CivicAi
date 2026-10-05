@@ -28,9 +28,9 @@ from app.db.models.complaint import Complaint
 from app.db.models.core import User
 from app.db.session import get_db
 from app.schemas.admin import (
-    AdminComplaintDetail, AnalyticsResponse, ComplaintPage, ComplaintRow, ContractorRow,
-    EscalationSummary, EvidenceCitation, LoginResponse, PerformanceResponse, TokenUser,
-    WorkOrderPage, WorkOrderRow, WorkOrderSummary,
+    AdminComplaintDetail, AnalyticsResponse, BriefingResponse, ComplaintPage, ComplaintRow,
+    ContractorRow, EmailDraftResponse, EscalationSummary, EvidenceCitation, LoginResponse,
+    PerformanceResponse, TokenUser, WorkOrderPage, WorkOrderRow, WorkOrderSummary,
 )
 from app.services.auth import create_access_token, verify_password
 
@@ -347,3 +347,146 @@ def analytics_performance(
     """The same shape as /contractors. The frontend calls both; they are one view of
     the data and keeping them identical is cheaper than explaining a difference."""
     return list_contractors(officer, db)
+
+
+@router.get("/briefing", response_model=BriefingResponse)
+def latest_briefing(
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> BriefingResponse:
+    """The most recent briefing for this tenant.
+
+    404 when none has been written yet, rather than an empty narrative: a screen
+    showing a blank briefing cannot be told from one showing a quiet day.
+    """
+    from app.db.models.workflow import DailyBriefing
+
+    briefing = (db.query(DailyBriefing)
+                .filter(DailyBriefing.tenant_id == officer.tenant_id)
+                .order_by(DailyBriefing.brief_date.desc())
+                .first())
+    if briefing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No briefing has been generated yet",
+        )
+    return BriefingResponse.model_validate(briefing)
+
+
+def _email_draft_chain():
+    """The real draft chain. A module-level function so a test can replace it
+    without reaching into the service, which has its own tests for the prose."""
+    from app.ai.llm import Task, build_structured
+    from app.ai.schemas import EmailDraft
+
+    return build_structured(Task.EMAIL_DRAFT, EmailDraft, "email_draft")
+
+
+def _email_draft_retriever():
+    from app.ai.graph.runner import _POLICY_RETRIEVER
+
+    return _POLICY_RETRIEVER
+
+
+def _owned_complaint(db: Session, complaint_id: str, officer) -> Complaint:
+    complaint = db.query(Complaint).filter(Complaint.id == complaint_id).one_or_none()
+    if complaint is None or complaint.tenant_id != officer.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Complaint not found")
+    return complaint
+
+
+@router.post("/complaints/{complaint_id}/email-draft", response_model=EmailDraftResponse)
+def generate_email_draft(
+    complaint_id: str,
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> EmailDraftResponse:
+    """Draft the department email for this complaint.
+
+    The HTTP half of the flow Phase 2c built and deliberately left unexposed, because
+    it was waiting for officer authentication to exist.
+
+    The one endpoint in this phase that calls a model, so the failure modes are
+    explicit: a complaint with no category is 409 (there is no department to write
+    to yet, which is a state problem and not the caller's fault), and a provider
+    outage or a spent quota is 503 with a message saying to try again — never a 500,
+    which would tell the officer the system is broken when it is only busy.
+    """
+    from app.constants import CATEGORY_DEPARTMENT, Category
+    from app.services.email_draft import EmailDraftFailed, draft_department_email
+
+    complaint = _owned_complaint(db, complaint_id, officer)
+    if not complaint.category:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This complaint has not been classified yet, so there is no "
+                   "department to write to",
+        )
+
+    # Read what the route needs before the call: draft_department_email closes the
+    # session it is handed, which expunges every instance this request is holding.
+    # That is its documented contract -- the same warning GraphDeps.session_factory
+    # carries -- so nothing ORM-shaped may be kept across the call.
+    complaint_id = complaint.id
+    tracking_id = complaint.tracking_id
+    department = CATEGORY_DEPARTMENT[Category(complaint.category)]
+
+    try:
+        draft_department_email(
+            complaint_id=complaint_id,
+            session_factory=lambda: db,
+            chain=_email_draft_chain(),
+            retriever=_email_draft_retriever(),
+        )
+    except EmailDraftFailed as exc:
+        logger.warning("email draft unavailable for %s: %s", tracking_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The drafting model is unavailable. Try again in a few minutes.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    # Re-queried rather than refreshed: the instance above is detached now.
+    stored = db.query(Complaint).filter(Complaint.id == complaint_id).one()
+    return EmailDraftResponse(
+        complaint_id=stored.id,
+        tracking_id=tracking_id,
+        department=department,
+        draft=stored.email_draft,
+        approved=stored.email_approved,
+    )
+
+
+@router.post("/complaints/{complaint_id}/email-draft/approve",
+             response_model=EmailDraftResponse)
+def approve_email_draft(
+    complaint_id: str,
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> EmailDraftResponse:
+    """Mark the draft as approved by this officer.
+
+    Idempotent — approving twice is the same as approving once, because a double
+    click must not be an error. Refuses an empty draft: approving nothing would set
+    a flag that says a human signed off on text that does not exist.
+    """
+    complaint = _owned_complaint(db, complaint_id, officer)
+    if not (complaint.email_draft or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="There is no draft to approve. Generate one first.",
+        )
+
+    if not complaint.email_approved:
+        complaint.email_approved = True
+        db.commit()
+        logger.info("officer %s approved the email draft for %s",
+                    officer.id, complaint.tracking_id)
+
+    return EmailDraftResponse(
+        complaint_id=complaint.id,
+        tracking_id=complaint.tracking_id,
+        draft=complaint.email_draft,
+        approved=True,
+    )
