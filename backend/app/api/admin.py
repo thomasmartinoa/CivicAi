@@ -1,0 +1,231 @@
+"""Officer-facing endpoints.
+
+The queue is ordered by priority and then recency, because an officer opens it to
+answer "what do I do next" rather than "what happened most recently".
+
+Two things here are not obvious:
+
+- **`sla_state` is derived from `services/sla.py`**, not recomputed. The monitor
+  emails a citizen at 50% and 75% of the window; if this screen drew those lines
+  anywhere else, an officer would see "on track" for a complaint whose author had
+  already been told it was running late.
+- **The evidence citations are assembled for the screen.** `RetrievedChunk.citation`
+  is a property, so it is not in the stored JSON — only `source` and `headers` are.
+  Rebuilding it here means the frontend does not have to know that.
+"""
+
+import logging
+import math
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
+from sqlalchemy import func
+from sqlalchemy.orm import Session, selectinload
+
+from app.api.deps import CurrentOfficer
+from app.db.models.complaint import Complaint
+from app.db.models.core import User
+from app.db.session import get_db
+from app.schemas.admin import (
+    AdminComplaintDetail, ComplaintPage, ComplaintRow, EscalationSummary,
+    EvidenceCitation, LoginResponse, TokenUser, WorkOrderSummary,
+)
+from app.services.auth import create_access_token, verify_password
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/admin", tags=["admin"])
+
+MAX_PAGE_SIZE = 100
+"""A tenant can hold a hundred thousand complaints. Without a ceiling, one request
+could ask for all of them and serialise the lot."""
+
+
+class LoginRequest(BaseModel):
+    # A plain str, not EmailStr: that needs the email-validator package, and
+    # validating the *format* of an address being looked up adds nothing — a
+    # malformed one simply will not match a row. It would also hand back a 422
+    # distinguishable from the 401 below, which is the oracle this endpoint is
+    # careful not to be.
+    email: str
+    password: str
+
+
+@router.post("/login", response_model=LoginResponse)
+def login(payload: LoginRequest, db: Annotated[Session, Depends(get_db)]) -> LoginResponse:
+    """Exchange a password for a token.
+
+    An unknown email and a wrong password produce the same status and the same
+    message. Distinguishing them turns this into an oracle for which addresses have
+    accounts, which for a municipal system is a list of its staff. The password is
+    also verified even when no user was found, so the two paths take comparable time
+    rather than differing by a bcrypt round.
+    """
+    user = db.query(User).filter(func.lower(User.email) == payload.email.lower()).one_or_none()
+    hashed = user.password_hash if user else None
+    if not verify_password(payload.password, hashed) or user is None:
+        logger.info("failed login for %r", payload.email)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Incorrect email or password")
+    if user.role not in {"officer", "admin"}:
+        # A citizen has no password in practice, but a seeded or imported one might.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="This endpoint requires officer access")
+
+    return LoginResponse(
+        access_token=create_access_token(user_id=user.id, role=user.role),
+        user=TokenUser.model_validate(user),
+    )
+
+
+@router.get("/me", response_model=TokenUser)
+def me(officer: CurrentOfficer) -> TokenUser:
+    """Who the token belongs to, so the frontend can restore a session without
+    keeping the user in browser storage alongside it."""
+    return TokenUser.model_validate(officer)
+
+
+def _sla_state(work_order) -> str:
+    """Translate a work order's position in its window into a word for the screen.
+
+    The thresholds come from services/sla.py so this cannot drift from the emails.
+    """
+    from app.db.base import utcnow
+    from app.services.sla import URGENT_AT, WARNING_AT, elapsed_fraction
+
+    if work_order is None or work_order.sla_deadline is None:
+        return "no_deadline"
+    if work_order.status == "completed":
+        return "completed"
+    fraction = elapsed_fraction(work_order, utcnow())
+    if fraction >= 1.0:
+        return "breached"
+    if fraction >= URGENT_AT:
+        return "urgent"
+    if fraction >= WARNING_AT:
+        return "warning"
+    return "on_track"
+
+
+@router.get("/complaints", response_model=ComplaintPage)
+def list_complaints(
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+    status_: Annotated[str | None, Query(alias="status")] = None,
+    category: str | None = None,
+    risk_level: str | None = None,
+    district: str | None = None,
+    q: Annotated[str | None, Query(description="matches the tracking id or description")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 25,
+) -> ComplaintPage:
+    """The officer's queue, most urgent first.
+
+    Scoped to the officer's own tenant. An officer with no tenant sees nothing rather
+    than everything — the same fail-closed rule route_node applies, for the same
+    reason: an unscoped query spans every municipality in the database.
+    """
+    if not officer.tenant_id:
+        return ComplaintPage(items=[], total=0, page=page, size=size, pages=0)
+
+    query = db.query(Complaint).filter(Complaint.tenant_id == officer.tenant_id)
+    if status_:
+        query = query.filter(Complaint.status == status_)
+    if category:
+        query = query.filter(Complaint.category == category)
+    if risk_level:
+        query = query.filter(Complaint.risk_level == risk_level)
+    if district:
+        query = query.filter(Complaint.district == district)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(Complaint.tracking_id.ilike(like) | Complaint.description.ilike(like))
+
+    total = query.order_by(None).count()
+    rows = (
+        query
+        # One query for the work orders rather than one per row: the list is the
+        # endpoint most likely to be hit with a large page size.
+        .options(selectinload(Complaint.work_order))
+        .order_by(Complaint.priority_score.desc().nullslast(), Complaint.created_at.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+        .all()
+    )
+
+    items = []
+    for complaint in rows:
+        row = ComplaintRow.model_validate(complaint)
+        items.append(row.model_copy(update={
+            "sla_state": _sla_state(complaint.work_order),
+            "is_cluster": bool(complaint.cluster_id),
+        }))
+    return ComplaintPage(items=items, total=total, page=page, size=size,
+                         pages=math.ceil(total / size) if total else 0)
+
+
+def _citations(complaint) -> list[EvidenceCitation]:
+    citations = []
+    for chunk in complaint.evidence or []:
+        source = chunk.get("source", "unknown")
+        headers = chunk.get("headers") or []
+        citations.append(EvidenceCitation(
+            node=chunk.get("node", "unknown"),
+            source=source,
+            citation=" › ".join([source, *headers]),
+            snippet=chunk.get("snippet"),
+            score=chunk.get("score"),
+        ))
+    return citations
+
+
+@router.get("/complaints/{complaint_id}", response_model=AdminComplaintDetail)
+def complaint_detail(
+    complaint_id: str,
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> AdminComplaintDetail:
+    """One complaint, with everything an officer needs to check the decision.
+
+    This is the first screen on which the grounding work from Phase 2b is visible to
+    a person: the citations the nodes retrieved and the justification `route` wrote.
+    """
+    complaint = (
+        db.query(Complaint)
+        .options(selectinload(Complaint.media), selectinload(Complaint.work_order),
+                 selectinload(Complaint.escalations))
+        .filter(Complaint.id == complaint_id)
+        .one_or_none()
+    )
+    # 404 rather than 403 for another tenant's complaint: confirming it exists would
+    # leak that this id is real somewhere in the system.
+    if complaint is None or complaint.tenant_id != officer.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Complaint not found")
+
+    # Assembled field by field rather than model_validate(complaint): the nested
+    # work order needs a computed sla_state the ORM object does not carry, and
+    # giving that field a default so validation passes would mean a wrong value
+    # shipping silently whenever someone forgot to override it.
+    nested = {"media", "evidence", "work_order", "escalations"}
+    scalars = {name: getattr(complaint, name)
+               for name in AdminComplaintDetail.model_fields if name not in nested}
+
+    work_order = None
+    if complaint.work_order is not None:
+        order = complaint.work_order
+        work_order = WorkOrderSummary(
+            **{name: getattr(order, name) for name in WorkOrderSummary.model_fields
+               if name not in {"sla_state", "contractor_name"}},
+            sla_state=_sla_state(order),
+            contractor_name=order.contractor.name if order.contractor else None,
+        )
+
+    return AdminComplaintDetail(
+        **scalars,
+        evidence=_citations(complaint),
+        work_order=work_order,
+        escalations=[EscalationSummary.model_validate(e) for e in complaint.escalations],
+        media=[{"file_path": m.file_path, "media_type": m.media_type,
+                "original_filename": m.original_filename} for m in complaint.media],
+    )
