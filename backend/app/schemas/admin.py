@@ -237,3 +237,35 @@ class EmailDraftResponse(BaseModel):
     department: str | None = None
     draft: str | None = None
     approved: bool = False
+
+
+class ComplaintUpdate(BaseModel):
+    """What an officer may change about a complaint: where it is in its lifecycle,
+    and nothing else.
+
+    Not writable, on purpose: `description` (what the citizen said), `category`,
+    `risk_level`, `priority_score` and `routing_justification` (what the system
+    decided and cited). An endpoint that let an officer rewrite those would quietly
+    destroy the audit trail the whole citation apparatus exists to produce.
+    Disagreeing with a classification is a reason to change the status, not to edit
+    the past.
+
+    There is also no officer-note field, because the table has no column for one —
+    recording *why* a status changed needs a migration, and it is written down as
+    carried forward rather than smuggled into an existing column.
+    """
+
+    status: str | None = None
+
+
+class WorkOrderUpdate(BaseModel):
+    """What an officer may change about a work order.
+
+    `completed_at` is absent deliberately — the server sets it. Every SLA figure on
+    the dashboard is computed from that timestamp, so accepting it from a client
+    would let anybody with an officer token manufacture a compliance record.
+    """
+
+    status: str | None = None
+    actual_cost: float | None = None
+    notes: str | None = None

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, W
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.api.deps import VerifiedCitizen
 from app.db.models.complaint import Complaint, ComplaintMedia
 from app.db.session import get_db
 from app.schemas.complaint import (
@@ -23,6 +24,7 @@ from app.schemas.complaint import (
     VerifiedComplaints,
 )
 from app.services import media as media_module
+from app.services.auth import create_citizen_token
 from app.services.execution import schedule_complaint_run
 from app.services.media import (
     MAX_UPLOAD_BYTES, MediaTooLarge, MediaTypeNotAllowed, StoredMedia, store_upload,
@@ -226,8 +228,36 @@ def verify_otp(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="That code is not valid")
 
-    complaints = complaints_for(db, payload.email)
+    address = payload.email.strip().lower()
+    complaints = complaints_for(db, address)
+    # A token, not just the data: the frontend's next call is /complaints/my, and
+    # without something to present there it would have to send the address again and
+    # be believed. See that route's docstring.
     return VerifiedComplaints(
-        email=payload.email.strip().lower(),
+        email=address,
+        access_token=create_citizen_token(address),
         complaints=[ComplaintDetail.model_validate(c) for c in complaints],
     )
+
+
+@router.get("/my", response_model=list[ComplaintDetail])
+def my_complaints(
+    citizen: VerifiedCitizen,
+    db: Annotated[Session, Depends(get_db)],
+    email: str | None = None,
+) -> list[ComplaintDetail]:
+    """The complaints belonging to the verified token holder.
+
+    **The `email` query parameter is accepted and ignored.** The v1-era frontend calls
+    this as `/complaints/my?email=<address>` and that signature is the whole OTP flow
+    undone: anyone could read anybody's complaints by guessing an address, which is
+    exactly what the one-time code exists to prevent. Rather than break the frontend
+    or honour the parameter, the address comes from the token and the parameter is
+    discarded — there is a test that passes somebody else's address and gets the
+    caller's own complaints back.
+    """
+    from app.services.otp import complaints_for
+
+    if email and email.strip().lower() != citizen:
+        logger.info("a /complaints/my call passed an address other than its token's")
+    return [ComplaintDetail.model_validate(c) for c in complaints_for(db, citizen)]

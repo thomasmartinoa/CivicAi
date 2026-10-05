@@ -115,3 +115,30 @@ def decode_token(token: str) -> TokenClaims:
         role=payload.get("role") or "citizen",
         expires_at=datetime.fromtimestamp(expires, tz=timezone.utc),
     )
+
+
+CITIZEN_ROLE = "citizen_email"
+"""The role on a token minted by the OTP flow.
+
+Deliberately not "citizen": a `User` row with `role="citizen"` is a real account, and
+these tokens stand for nothing more than "somebody proved they can read mail at this
+address". Keeping the names apart means `get_current_user`, which looks a user up by
+id, can never accidentally accept one.
+"""
+
+CITIZEN_TOKEN_MINUTES = 30
+
+
+def create_citizen_token(email: str) -> str:
+    """A short-lived token proving control of an email address.
+
+    The subject is the address rather than a user id, because a citizen has no user
+    row. Thirty minutes is long enough to read your complaints and short enough that
+    a token left in a browser on a shared machine expires before the next person
+    sits down.
+    """
+    return create_access_token(
+        user_id=email.strip().lower(),
+        role=CITIZEN_ROLE,
+        expires_delta=timedelta(minutes=CITIZEN_TOKEN_MINUTES),
+    )

@@ -24,11 +24,13 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import CurrentOfficer
+from app.db.base import utcnow
 from app.db.models.complaint import Complaint
 from app.db.models.core import User
 from app.db.session import get_db
 from app.schemas.admin import (
     AdminComplaintDetail, AnalyticsResponse, BriefingResponse, ComplaintPage, ComplaintRow,
+    ComplaintUpdate, WorkOrderUpdate,
     ContractorRow, EmailDraftResponse, EscalationSummary, EvidenceCitation, LoginResponse,
     PerformanceResponse, TokenUser, WorkOrderPage, WorkOrderRow, WorkOrderSummary,
 )
@@ -92,7 +94,6 @@ def _sla_state(work_order) -> str:
 
     The thresholds come from services/sla.py so this cannot drift from the emails.
     """
-    from app.db.base import utcnow
     from app.services.sla import URGENT_AT, WARNING_AT, elapsed_fraction
 
     if work_order is None or work_order.sla_deadline is None:
@@ -489,4 +490,146 @@ def approve_email_draft(
         tracking_id=complaint.tracking_id,
         draft=complaint.email_draft,
         approved=True,
+    )
+
+
+@router.patch("/complaints/{complaint_id}", response_model=AdminComplaintDetail)
+def update_complaint(
+    complaint_id: str,
+    payload: ComplaintUpdate,
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> AdminComplaintDetail:
+    """Move a complaint along its lifecycle, or re-prioritise it.
+
+    **Only the fields an officer is accountable for are writable.** The description,
+    the category, the risk score and the routing justification are not: they are the
+    record of what the citizen said and what the system decided, and an endpoint that
+    let an officer rewrite them would quietly destroy the audit trail that the whole
+    citation apparatus exists to produce. Disagreeing with a classification is a
+    reason to change the status and say why in `officer_note`, not to edit the past.
+
+    Status changes go through COMPLAINT_TRANSITIONS, so a misdirected PATCH cannot
+    drag a rejected complaint back into the queue or mark an unprocessed one resolved.
+    """
+    from app.constants import COMPLAINT_TRANSITIONS
+
+    complaint = _owned_complaint(db, complaint_id, officer)
+
+    if payload.status is not None and payload.status != complaint.status:
+        allowed = COMPLAINT_TRANSITIONS.get(complaint.status, ())
+        if payload.status not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A complaint that is {complaint.status!r} cannot become "
+                       f"{payload.status!r}. Allowed: {', '.join(allowed) or 'nothing'}.",
+            )
+        previous = complaint.status
+        complaint.status = payload.status
+        logger.info("officer %s moved %s from %s to %s", officer.id,
+                    complaint.tracking_id, previous, payload.status)
+
+        # Work called done that was not is the common case, and the alternative is
+        # an officer filing a duplicate. Counting it here is what makes a reopened
+        # complaint distinguishable later from one that went right the first time.
+        if complaint.status == "in_progress" and previous == "resolved":
+            complaint.reopen_count = (complaint.reopen_count or 0) + 1
+
+    db.commit()
+    return complaint_detail(complaint_id, officer, db)
+
+
+@router.post("/complaints/{complaint_id}/approve-email", response_model=EmailDraftResponse)
+def approve_email_draft_alias(
+    complaint_id: str,
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> EmailDraftResponse:
+    """The path the v1-era frontend posts to. Same behaviour as
+    /email-draft/approve.
+
+    The frontend also sends an `email_draft` body, which is ignored: approving is a
+    signature on the text that is stored, and accepting a body here would let the
+    client approve wording the server never saw.
+    """
+    return approve_email_draft(complaint_id, officer, db)
+
+
+@router.patch("/work-orders/{work_order_id}", response_model=WorkOrderRow)
+def update_work_order(
+    work_order_id: str,
+    payload: WorkOrderUpdate,
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> WorkOrderRow:
+    """Move a work order along, and keep the things that depend on it consistent.
+
+    **`completed_at` is set by the server, never by the client.** Every SLA figure on
+    the dashboard is computed from it, so a client-supplied timestamp would let
+    anybody with an officer token manufacture a compliance record. The same applies
+    to the contractor's workload, which is decremented here rather than trusted from
+    the request.
+    """
+    from app.constants import WORK_ORDER_CLOSED, WORK_ORDER_TRANSITIONS
+    from app.db.models.core import Contractor
+    from app.db.models.workflow import WorkOrder
+
+    order = (db.query(WorkOrder)
+             .options(selectinload(WorkOrder.complaint), selectinload(WorkOrder.contractor))
+             .filter(WorkOrder.id == work_order_id).one_or_none())
+    if order is None or order.tenant_id != officer.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Work order not found")
+
+    if payload.status is not None and payload.status != order.status:
+        allowed = WORK_ORDER_TRANSITIONS.get(order.status, ())
+        if payload.status not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A work order that is {order.status!r} cannot become "
+                       f"{payload.status!r}. Allowed: {', '.join(allowed) or 'nothing'}.",
+            )
+        was_open = order.status not in WORK_ORDER_CLOSED
+        order.status = payload.status
+
+        if payload.status == "completed":
+            order.completed_at = utcnow()
+        elif payload.status == "in_progress":
+            # Reopening clears the completion, or the order would read as finished
+            # and in progress at once and the median would count a job twice.
+            order.completed_at = None
+
+        # Free the contractor when the order closes, and re-occupy them if it opens
+        # again. Guarded by was_open so a repeated PATCH cannot drive the count
+        # negative or inflate it.
+        if order.contractor_id:
+            contractor = db.get(Contractor, order.contractor_id)
+            if contractor is not None:
+                closing = payload.status in WORK_ORDER_CLOSED
+                if was_open and closing:
+                    contractor.active_workload = max(0, (contractor.active_workload or 0) - 1)
+                elif not was_open and not closing:
+                    contractor.active_workload = (contractor.active_workload or 0) + 1
+
+    if payload.actual_cost is not None:
+        order.actual_cost = payload.actual_cost
+    if payload.notes is not None:
+        order.notes = payload.notes
+    # Who touched it, on the row rather than only in the log, because the log is
+    # not what an officer will be asked to produce six months later.
+    order.officer_id = officer.id
+
+    db.commit()
+    db.refresh(order)
+    return WorkOrderRow(
+        id=order.id, complaint_id=order.complaint_id,
+        tracking_id=order.complaint.tracking_id if order.complaint else "unknown",
+        category=order.complaint.category if order.complaint else None,
+        risk_level=order.complaint.risk_level if order.complaint else None,
+        status=order.status, sla_hours=order.sla_hours, sla_deadline=order.sla_deadline,
+        sla_state=_sla_state(order),
+        contractor_name=order.contractor.name if order.contractor else None,
+        estimated_cost=order.estimated_cost, is_cluster=order.is_cluster,
+        cluster_size=order.cluster_size, created_at=order.created_at,
+        completed_at=order.completed_at,
     )

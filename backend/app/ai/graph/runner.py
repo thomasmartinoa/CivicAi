@@ -315,12 +315,18 @@ def persist_result(state: ComplaintState, session, *, duration_ms: int) -> None:
                 notes=draft.summary,
             ))
 
+    # started_at is set explicitly rather than left to the column default, which
+    # fires at INSERT — i.e. *after* finished_at was computed — so the row came out
+    # with finished_at a hair before started_at and any "finished minus started"
+    # query read negative. Derived from the duration so the pair agrees.
+    finished = utcnow()
     run = AgentRun(
         complaint_id=complaint.id,
         thread_id=state["complaint_id"],
         status="completed" if status != "failed" else "failed",
         graph_version=GRAPH_VERSION,
-        finished_at=utcnow(),
+        started_at=finished - timedelta(milliseconds=duration_ms),
+        finished_at=finished,
         duration_ms=duration_ms,
         error="; ".join(state["errors"]) or None,
     )
@@ -519,12 +525,14 @@ async def run_complaint(
             # LLM provider) is not the complaint's failure.
             duration_ms = int((time.monotonic() - started) * 1000)
             session.rollback()
+            failed_at = utcnow()
             session.add(AgentRun(
                 complaint_id=complaint_id,
                 thread_id=complaint_id,
                 status="failed",
                 graph_version=GRAPH_VERSION,
-                finished_at=utcnow(),
+                started_at=failed_at - timedelta(milliseconds=duration_ms),
+                finished_at=failed_at,
                 duration_ms=duration_ms,
                 error=f"{type(exc).__name__}: {exc}",
             ))

@@ -66,3 +66,33 @@ CATEGORY_DEPARTMENT: dict[Category, str] = {
     Category.FIRE_HAZARD: "Fire Department",
     Category.STRAY_ANIMALS: "Animal Control",
 }
+
+
+# ── lifecycle states an officer may set ─────────────────────────────────────
+#
+# The pipeline writes a complaint's status; an officer may move it onwards from
+# there. The transitions are an allow-list rather than a free field, so that a
+# misdirected PATCH cannot drag a rejected complaint back into the queue or mark an
+# unprocessed one resolved.
+
+COMPLAINT_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "processed": ("assigned", "closed"),
+    "assigned": ("in_progress", "resolved", "closed"),
+    "in_progress": ("resolved", "closed"),
+    "resolved": ("closed", "in_progress"),
+    "closed": (),
+}
+"""`in_progress` is reachable back from `resolved` on purpose: work that was called
+done and was not is the common case, and the alternative is an officer opening a
+duplicate complaint."""
+
+WORK_ORDER_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "created": ("assigned", "cancelled"),
+    "assigned": ("in_progress", "completed", "cancelled"),
+    "in_progress": ("completed", "cancelled"),
+    "completed": ("in_progress",),
+    "cancelled": (),
+}
+
+WORK_ORDER_CLOSED = ("completed", "cancelled")
+"""States in which a work order no longer occupies its contractor."""

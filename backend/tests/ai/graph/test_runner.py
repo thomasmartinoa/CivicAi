@@ -562,3 +562,50 @@ async def test_a_run_with_no_routing_leaves_the_justification_alone(env):
 
     session.expire_all()
     assert session.query(Complaint).one().routing_justification is None
+
+
+async def test_a_run_record_finishes_after_it_starts(env):
+    """Found by a live run, invisible to every test that came before it.
+
+    `started_at` was left to the column default, which fires at INSERT — after
+    `finished_at` had already been computed — so a real row came out with
+    `finished_at` about a microsecond *before* `started_at`, and any
+    "finished minus started" query read negative.
+    """
+    from app.db.models.ai import AgentRun
+
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    run = session.query(AgentRun).filter_by(complaint_id=complaint.id).one()
+    assert run.started_at <= run.finished_at
+    recorded_ms = (run.finished_at - run.started_at).total_seconds() * 1000
+    assert abs(recorded_ms - run.duration_ms) < 2, (
+        "the timestamps and the duration must describe the same interval"
+    )
+
+
+async def test_a_failed_run_also_records_a_sane_interval(env):
+    """The failure path built its AgentRun the same way, so it had the same bug.
+
+    Reached with a configuration failure rather than a provider error, because a
+    node traps its own exceptions and records them in `errors` — only something
+    outside the graph, like having no model configured at all, gets this far.
+    """
+    from app.db.models.ai import AgentRun
+
+    session, complaint = env
+    # The id before the call: the failure path rolls back and closes the session,
+    # which detaches this instance -- the same contract that caught the email-draft
+    # endpoint in Phase 4a.
+    complaint_id = complaint.id
+
+    with pytest.raises(Exception):
+        await run_complaint(complaint_id, session_factory=lambda: session,
+                            deps=GraphDeps(), checkpointer=InMemorySaver())
+
+    run = session.query(AgentRun).filter_by(complaint_id=complaint_id).one()
+    assert run.status == "failed"
+    assert run.error
+    assert run.started_at <= run.finished_at

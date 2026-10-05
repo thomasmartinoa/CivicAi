@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models.core import User
 from app.db.session import get_db
-from app.services.auth import InvalidToken, decode_token
+from app.services.auth import CITIZEN_ROLE, InvalidToken, decode_token
 
 logger = logging.getLogger(__name__)
 
@@ -96,3 +96,39 @@ def get_current_admin(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 CurrentOfficer = Annotated[User, Depends(get_current_officer)]
 CurrentAdmin = Annotated[User, Depends(get_current_admin)]
+
+
+def get_verified_citizen(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> str:
+    """The email address a citizen token proves control of.
+
+    No database lookup, because there is no row to look up — the address *is* the
+    identity. The role is checked explicitly so an officer's token cannot be used
+    here either: an officer reading one citizen's complaints should go through the
+    admin API, where it is logged against their account.
+    """
+    if credentials is None or not credentials.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        claims = decode_token(credentials.credentials)
+    except InvalidToken:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from None
+    if claims.role != CITIZEN_ROLE:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return claims.user_id
+
+
+VerifiedCitizen = Annotated[str, Depends(get_verified_citizen)]

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class ComplaintSubmitted(BaseModel):
@@ -51,10 +51,32 @@ class OtpRequested(BaseModel):
 
 
 class OtpVerification(BaseModel):
+    """The v1-era frontend posts this field as `otp`; the rest of the codebase calls
+    it a code. Both are accepted rather than renaming one of them, because changing
+    the wire name would break the existing screen for no gain."""
+
     email: str
     code: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_otp_as_code(cls, data):
+        """Map the frontend's `otp` onto `code`.
+
+        A validator rather than a validation_alias: the alias form works but makes
+        Pydantic emit an UnsupportedFieldAttributeWarning when FastAPI rebuilds the
+        body model, and a suppressed warning whose cause is not understood is worse
+        than three explicit lines.
+        """
+        if isinstance(data, dict) and "code" not in data and "otp" in data:
+            data = {**data, "code": data["otp"]}
+        return data
 
 
 class VerifiedComplaints(BaseModel):
     email: str
+    access_token: str
+    """Proof of control of the address, for the follow-up call to /complaints/my.
+    Without it that endpoint would have to trust an email in a query string."""
+    token_type: str = "bearer"
     complaints: list[ComplaintDetail] = []
