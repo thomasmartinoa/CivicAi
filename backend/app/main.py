@@ -80,7 +80,15 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    # 5173 is `npm run dev`; 4173 is `npm run preview`, which serves the production
+    # build and is what the Phase 5 screenshots are taken against. An origin missing
+    # here fails as a blocked preflight in the browser and as nothing at all in the
+    # server log, which is a slow thing to diagnose.
+    allow_origins=[
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:4173", "http://127.0.0.1:4173",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

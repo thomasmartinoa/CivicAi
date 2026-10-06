@@ -61,3 +61,14 @@ def test_every_settings_field_is_documented_in_env_example():
             continue
         key = name.upper()
         assert f"{key}=" in content, f"{key} is a Settings field but missing from .env.example"
+
+
+def test_cors_allows_both_frontend_dev_servers():
+    """5173 is `npm run dev` and 4173 is `npm run preview`. A missing origin shows up
+    as a blocked preflight in the browser and as nothing at all in the server log."""
+    from app.main import app
+
+    cors = next(m for m in app.user_middleware if "CORS" in str(m.cls))
+    origins = cors.kwargs["allow_origins"]
+    assert "http://localhost:5173" in origins
+    assert "http://localhost:4173" in origins
