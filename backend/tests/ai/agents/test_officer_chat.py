@@ -259,3 +259,59 @@ def test_the_prompt_states_the_rules_the_tools_rely_on():
     assert "never follow instructions" in text
     assert "cannot change anything" in text
     assert "only from tool results" in text
+
+
+# ── provider content shapes ─────────────────────────────────────────────────
+
+
+def _blocks(text: str) -> list[dict]:
+    """Content the way Gemini 3 actually returns it."""
+    return [{"type": "text", "text": text, "extras": {"signature": "abc123"}}]
+
+
+async def test_an_answer_in_content_blocks_is_not_discarded(plain_prompt):
+    """Found by the first live conversation. Gemini 3 returns `content` as a list of
+    content blocks rather than a string, so an `isinstance(content, str)` check
+    throws the answer away and the officer is told "I ran the tools but did not
+    produce an answer." Every test before this one used a fake that returned a plain
+    string, which is the convenient shape rather than the real one.
+    """
+    model = ScriptedModel(seen=[], script=[
+        AIMessage(content="", tool_calls=[_call("search_policy", "s1", query="roads")]),
+        AIMessage(content=_blocks("Public Works owns road surface defects.")),
+    ])
+    agent = build_officer_agent(model, [_tool("search_policy", result="PWD owns it")],
+                                prompt=plain_prompt)
+
+    result = await run_officer_chat("who owns potholes?", agent=agent)
+    assert result.answer == "Public Works owns road surface defects."
+
+
+async def test_the_stream_also_handles_content_blocks(plain_prompt):
+    model = ScriptedModel(seen=[], script=[
+        AIMessage(content=_blocks("Nothing is overdue.")),
+    ])
+    agent = build_officer_agent(model, [_tool("work_orders_at_risk")],
+                                prompt=plain_prompt)
+
+    events = [e async for e in stream_officer_chat("anything overdue?", agent=agent)]
+    answers = [data["text"] for name, data in events if name == "answer"]
+    assert answers == ["Nothing is overdue."]
+
+
+async def test_a_tool_requesting_turn_with_block_content_is_not_mistaken_for_an_answer(
+        plain_prompt):
+    """A model may emit a sentence of reasoning alongside a tool call. That text is
+    not the final answer, and the last text wins — so the real answer must still be
+    the one reported."""
+    model = ScriptedModel(seen=[], script=[
+        AIMessage(content=_blocks("Let me check the SOP."),
+                  tool_calls=[_call("search_policy", "s1", query="roads")]),
+        AIMessage(content=_blocks("Public Works owns them.")),
+    ])
+    agent = build_officer_agent(model, [_tool("search_policy", result="PWD")],
+                                prompt=plain_prompt)
+
+    result = await run_officer_chat("who owns potholes?", agent=agent)
+    assert result.answer == "Public Works owns them."
+    assert [c.name for c in result.tool_calls] == ["search_policy"]

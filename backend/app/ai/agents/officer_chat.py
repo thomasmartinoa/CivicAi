@@ -115,6 +115,25 @@ def _history_to_messages(history: list[dict] | None) -> list:
     return messages
 
 
+def _message_text(message) -> str:
+    """The text of an AI message, whatever shape the provider used.
+
+    Gemini 3 returns `content` as a list of content blocks — `[{"type": "text",
+    "text": "...", "extras": {...}}]` — not a string. An `isinstance(content, str)`
+    check therefore discards the answer silently, which is exactly what the first
+    live conversation did: the agent searched the corpus, got four passages, and
+    reported "I ran the tools but did not produce an answer."
+
+    `.text` is LangChain's own accessor and handles both shapes. A property, not a
+    method — calling it is deprecated.
+    """
+    try:
+        return (message.text or "").strip()
+    except Exception:  # noqa: BLE001 - an exotic content shape must not end a turn
+        content = message.content
+        return content.strip() if isinstance(content, str) else ""
+
+
 def _collect(messages: list) -> tuple[str, list[ToolCall]]:
     """The final answer and the tool calls that produced it.
 
@@ -135,10 +154,11 @@ def _collect(messages: list) -> tuple[str, list[ToolCall]]:
                 calls[call_id] = ToolCall(name=requested["name"],
                                           args=dict(requested.get("args") or {}))
                 order.append(call_id)
-            # The last AI message with text and no tool calls is the answer. An AI
-            # message that only requests tools has empty content and is not one.
-            if isinstance(message.content, str) and message.content.strip():
-                answer = message.content.strip()
+            # The last AI message with text is the answer. An AI message that only
+            # requests tools has no text and is not one.
+            text = _message_text(message)
+            if text:
+                answer = text
         elif isinstance(message, ToolMessage):
             existing = calls.get(message.tool_call_id)
             if existing is not None:
@@ -202,9 +222,10 @@ async def stream_officer_chat(question: str, *, agent, history: list[dict] | Non
                         for requested in message.tool_calls or []:
                             yield "tool_call", {"name": requested["name"],
                                                 "args": dict(requested.get("args") or {})}
-                        if isinstance(message.content, str) and message.content.strip():
+                        text = _message_text(message)
+                        if text:
                             answered = True
-                            yield "answer", {"text": message.content.strip()}
+                            yield "answer", {"text": text}
                     elif isinstance(message, ToolMessage):
                         yield "tool_result", {"name": message.name,
                                               "result": message.content}
