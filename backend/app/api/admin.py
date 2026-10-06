@@ -645,7 +645,11 @@ def update_work_order(
     )
 
 
-def _run_row(run, *, tracking_id: str | None, step_count: int) -> AgentRunRow:
+LABEL_CHARS = 90
+
+
+def _run_row(run, *, tracking_id: str | None, step_count: int,
+             label: str | None = None) -> AgentRunRow:
     """One run, with `kind` derived rather than left for the caller to infer.
 
     A chat run is distinguished in the database by `complaint_id IS NULL`, which is
@@ -657,7 +661,23 @@ def _run_row(run, *, tracking_id: str | None, step_count: int) -> AgentRunRow:
         thread_id=run.thread_id, status=run.status, graph_version=run.graph_version,
         started_at=run.started_at, finished_at=run.finished_at,
         duration_ms=run.duration_ms, error=run.error, step_count=step_count,
+        label=label,
     )
+
+
+def _run_label(tracking_id: str | None, opener: str | None) -> str | None:
+    """What a row says it is about.
+
+    A pipeline run is its complaint. A chat run has no complaint, so without this a
+    list of conversations is a column of rows all reading "conversation" — which is
+    what the first render of the trace viewer actually looked like.
+    """
+    if tracking_id:
+        return tracking_id
+    if not opener:
+        return None
+    text = opener.strip()
+    return text if len(text) <= LABEL_CHARS else f"{text[:LABEL_CHARS].rstrip()}…"
 
 
 @router.get("/runs", response_model=AgentRunPage)
@@ -683,10 +703,15 @@ def list_runs(
 
     counts = (db.query(AgentStep.run_id, func.count(AgentStep.id).label("n"))
               .group_by(AgentStep.run_id).subquery())
+    # Step 0 of a chat run is the question. Joined here rather than fetched per row,
+    # because a list of twenty-five runs should not be twenty-six queries.
+    openers = (db.query(AgentStep.run_id, AgentStep.input_summary.label("opener"))
+               .filter(AgentStep.seq == 0).subquery())
 
-    query = (db.query(AgentRun, Complaint.tracking_id, counts.c.n)
+    query = (db.query(AgentRun, Complaint.tracking_id, counts.c.n, openers.c.opener)
              .outerjoin(Complaint, Complaint.id == AgentRun.complaint_id)
-             .outerjoin(counts, counts.c.run_id == AgentRun.id))
+             .outerjoin(counts, counts.c.run_id == AgentRun.id)
+             .outerjoin(openers, openers.c.run_id == AgentRun.id))
 
     mine = AgentRun.thread_id.like(f"chat:{officer.id}:%")
     theirs = Complaint.tenant_id == officer.tenant_id
@@ -704,8 +729,9 @@ def list_runs(
     rows = (query.order_by(AgentRun.started_at.desc())
             .offset((page - 1) * size).limit(size).all())
     return AgentRunPage(
-        items=[_run_row(run, tracking_id=tracking, step_count=n or 0)
-               for run, tracking, n in rows],
+        items=[_run_row(run, tracking_id=tracking, step_count=n or 0,
+                        label=_run_label(tracking, opener))
+               for run, tracking, n, opener in rows],
         total=total, page=page, size=size,
         pages=math.ceil(total / size) if total else 0,
     )
@@ -737,6 +763,8 @@ def run_detail(
 
     steps = (db.query(AgentStep).filter(AgentStep.run_id == run.id)
              .order_by(AgentStep.seq).all())
-    base = _run_row(run, tracking_id=tracking_id, step_count=len(steps))
+    opener = next((s.input_summary for s in steps if s.seq == 0), None)
+    base = _run_row(run, tracking_id=tracking_id, step_count=len(steps),
+                    label=_run_label(tracking_id, opener))
     return AgentRunDetail(**base.model_dump(),
                           steps=[AgentStepRow.model_validate(s) for s in steps])

@@ -158,3 +158,43 @@ export interface Analytics {
 export interface PerformanceMetrics {
   contractors: Contractor[];
 }
+
+/** One step in an agent run's timeline. */
+export interface AgentStep {
+  seq: number;
+  node: string;
+  /** `completed`, `failed`, or `step_limit` — the last meaning the agent ran out of
+   *  steps. Rendered as `completed` it would be indistinguishable from finishing. */
+  status: string;
+  duration_ms: number | null;
+  tokens: number | null;
+  input_summary: string | null;
+  output_summary: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+export interface AgentRun {
+  id: string;
+  complaint_id: string | null;
+  /** null for a chat run, which belongs to no single complaint. */
+  tracking_id: string | null;
+  /** `pipeline` or `chat`, derived server-side so the screen does not have to know
+   *  that a null complaint_id means a conversation. */
+  kind: string;
+  thread_id: string;
+  status: string;
+  graph_version: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  error: string | null;
+  step_count: number;
+  /** What the run was about: a tracking id for a pipeline run, the opening question
+   *  for a conversation. Without it the list is a column of identical rows. */
+  label: string | null;
+}
+
+export interface AgentRunDetail extends AgentRun {
+  steps: AgentStep[];
+}

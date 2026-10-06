@@ -328,6 +328,10 @@ class AgentRunRow(BaseModel):
     duration_ms: int | None = None
     error: str | None = None
     step_count: int = 0
+    label: str | None = None
+    """What this run was about, for a list that would otherwise be a column of
+    identical rows. A pipeline run is identified by its tracking id; a chat run has
+    no tracking id, so this carries the opening question instead."""
 
 
 class AgentRunDetail(AgentRunRow):

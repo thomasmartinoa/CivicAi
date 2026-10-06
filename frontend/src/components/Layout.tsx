@@ -12,6 +12,7 @@ const OFFICER_LINKS = [
   { to: '/admin/complaints', label: 'Queue' },
   { to: '/admin/work-orders', label: 'Work orders' },
   { to: '/admin/chat', label: 'Assistant' },
+  { to: '/admin/runs', label: 'Traces' },
 ];
 
 export default function Layout() {

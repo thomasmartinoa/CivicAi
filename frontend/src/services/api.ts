@@ -65,3 +65,6 @@ export const uploadCompletionPhoto = (workOrderId: string, file: File) => {
 };
 export const getLatestBriefing = () => api.get('/admin/briefing');
 export default api;
+
+export const getRuns = (params?: Record<string, string>) => api.get('/admin/runs', { params });
+export const getRunDetail = (id: string) => api.get(`/admin/runs/${id}`);

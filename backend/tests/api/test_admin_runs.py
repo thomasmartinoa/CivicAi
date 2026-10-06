@@ -187,3 +187,65 @@ def test_an_unknown_run_is_404(client, auth):
 
 def test_the_page_size_is_capped(client, auth):
     assert client.get("/admin/runs?size=5000", headers=auth).status_code == 422
+
+
+def test_a_chat_run_is_labelled_with_its_question(db_session, client, officer, auth):
+    """Without this the trace list is a column of rows all reading "conversation",
+    which is what the first render of that screen actually looked like."""
+    run = _run(db_session, thread=f"chat:{officer.id}:abc")
+    db_session.add(AgentStep(run_id=run.id, seq=0, node="question", status="completed",
+                             input_summary="What work orders are at risk right now?",
+                             output_summary="Two."))
+    db_session.commit()
+
+    item = client.get("/admin/runs?kind=chat", headers=auth).json()["items"][0]
+    assert item["label"] == "What work orders are at risk right now?"
+
+
+def test_a_pipeline_run_is_labelled_with_its_tracking_id(db_session, client, officer, auth):
+    _run(db_session, complaint=_complaint(db_session, officer.tenant_id, "CIV-LABEL001"))
+    db_session.commit()
+    assert client.get("/admin/runs", headers=auth).json()["items"][0]["label"] == "CIV-LABEL001"
+
+
+def test_a_long_question_is_truncated_in_the_label(db_session, client, officer, auth):
+    from app.api.admin import LABEL_CHARS
+
+    run = _run(db_session, thread=f"chat:{officer.id}:abc")
+    db_session.add(AgentStep(run_id=run.id, seq=0, node="question", status="completed",
+                             input_summary="why " * 100))
+    db_session.commit()
+
+    label = client.get("/admin/runs?kind=chat", headers=auth).json()["items"][0]["label"]
+    assert len(label) <= LABEL_CHARS + 1
+    assert label.endswith("…")
+
+
+def test_listing_runs_does_not_query_once_per_row(db_session, client, officer, auth):
+    """The label and the step count are joins. Fetching either per row would make a
+    twenty-five-run page twenty-six queries."""
+    from sqlalchemy import event
+
+    complaint = _complaint(db_session, officer.tenant_id, "CIV-NPLUS001")
+    for _ in range(12):
+        _run(db_session, complaint=complaint, steps=2)
+    db_session.commit()
+
+    statements = []
+    engine = db_session.get_bind()
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        if statement.strip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        body = client.get("/admin/runs?size=12", headers=auth).json()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert len(body["items"]) == 12
+    assert len(statements) <= 5, (
+        f"{len(statements)} selects for 12 rows — one per run means the label or the "
+        f"step count is being fetched per row:\n" + "\n".join(statements)
+    )
