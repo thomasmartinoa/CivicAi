@@ -66,7 +66,8 @@ failed in 20ms without calling the model at all, and the fix working at 28s.
 ```bash
 # Backend — 31 routes, 18 tables, 6 migrations
 cd backend
-python -m venv .venv && .venv/bin/pip install -r requirements.txt
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt   # -m pip, not .venv/bin/pip
 cp .env.example .env            # add GEMINI_API_KEY for anything live
 .venv/bin/python -m alembic upgrade head
 .venv/bin/python -m app.services.seed                    # tenant, departments, contractors
@@ -78,6 +79,14 @@ cd frontend && npm install && npm run dev
 ```
 
 Seeded officer login: `admin@civicai.gov` / `admin123`.
+
+> `.venv/bin/python -m pip` rather than `.venv/bin/pip`: the console scripts in a
+> virtualenv carry an **absolute** shebang, so moving the project directory breaks
+> every one of them — `bad interpreter: …/.venv/bin/python3: no such file or
+> directory`. Re-running `python -m venv .venv` rewrites `pyvenv.cfg` and does **not**
+> rewrite those shebangs, so it looks like it should have fixed it and does not.
+> `python -m pip` never reads a shebang. To repair an existing venv properly:
+> `rm -rf .venv && python -m venv .venv`.
 
 **Or in Docker**, which does the migrate/seed/serve sequence itself:
 
