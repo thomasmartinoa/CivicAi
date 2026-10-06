@@ -11,6 +11,7 @@ from datetime import timedelta
 
 import pytest
 
+from app.ai.graph.retrieval import DEFAULT_FETCH_K
 from app.ai.tools.officer import MAX_ROWS, build_officer_tools
 from app.db.base import utcnow
 from app.db.models.complaint import Complaint
@@ -262,20 +263,39 @@ def test_policy_search_returns_citations_in_the_graphs_own_format(tools, tenant,
             })()
 
     class FakeRetriever:
-        def search(self, query, k=5):
+        """Strict about the protocol on purpose.
+
+        The first version of this fake was `search(self, query, k=5)`, which
+        accepted a call the real retriever rejects — `LazyRetriever.search` is
+        keyword-only in k, fetch_k and filters. The tool shipped calling it with
+        only `k`, the test passed, and the first live run raised a TypeError. A fake
+        looser than the thing it stands in for is worse than no fake.
+        """
+
+        def __init__(self):
+            self.calls = []
+
+        def search(self, query, *, k, fetch_k, filters):
+            self.calls.append({"query": query, "k": k, "fetch_k": fetch_k,
+                               "filters": filters})
             return [FakeHit()]
 
+    retriever = FakeRetriever()
     with_policy = {t.name: t for t in build_officer_tools(
-        lambda: db_session, tenant_id=tenant, policy_retriever=FakeRetriever())}
+        lambda: db_session, tenant_id=tenant, policy_retriever=retriever)}
     passages = with_policy["search_policy"].invoke({"query": "who owns potholes"})["passages"]
     assert passages[0]["citation"] == "sop_roads.md › Roads SOP › Ownership"
+
+    # The protocol's other two arguments were actually supplied.
+    assert retriever.calls[0]["fetch_k"] == DEFAULT_FETCH_K
+    assert retriever.calls[0]["filters"] is None
 
 
 def test_a_dead_policy_index_does_not_end_the_turn(db_session, tenant):
     """Retrieval is a soft dependency everywhere else in this codebase and here too:
     the agent can still answer from the database."""
     class Broken:
-        def search(self, query, k=5):
+        def search(self, query, *, k, fetch_k, filters):
             raise RuntimeError("the index file is missing")
 
     broken = {t.name: t for t in build_officer_tools(

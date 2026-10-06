@@ -33,6 +33,8 @@ from collections.abc import Callable
 
 from langchain_core.tools import StructuredTool
 
+from app.ai.graph.retrieval import DEFAULT_FETCH_K
+
 logger = logging.getLogger(__name__)
 
 MAX_ROWS = 25
@@ -85,7 +87,13 @@ def build_officer_tools(
             # the agent can still answer from the database.
             return {"error": "The policy index is unavailable.", "passages": []}
         try:
-            hits = policy_retriever.search(query, k=min(k, 10))
+            # The retriever protocol is keyword-only in all three arguments — see
+            # GraphDeps.policy_retriever. Calling it with only `k` raises a
+            # TypeError, which a loose test fake will happily hide: this module's
+            # first live run did exactly that.
+            hits = policy_retriever.search(
+                query, k=min(k, 10), fetch_k=DEFAULT_FETCH_K, filters=None,
+            )
         except Exception as exc:  # noqa: BLE001 - a dead index must not end the turn
             logger.warning("policy search failed: %s", exc)
             return {"error": "The policy index could not be searched.", "passages": []}
