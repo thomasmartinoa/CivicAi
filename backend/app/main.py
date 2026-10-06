@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import admin, complaints, public, system
+from app.api import admin, chat, complaints, public, system
 from app.config import settings
 from app.db.session import SessionLocal
 
@@ -90,6 +90,7 @@ app.include_router(system.router)
 app.include_router(complaints.router)
 app.include_router(admin.router)
 app.include_router(public.router)
+app.include_router(chat.router)
 
 settings.upload_path.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(settings.upload_path)), name="uploads")

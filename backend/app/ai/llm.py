@@ -38,6 +38,7 @@ class Task(StrEnum):
     NARRATE = "narrate"
     EMAIL_DRAFT = "email_draft"
     WORK_ORDER = "work_order"
+    OFFICER_CHAT = "officer_chat"
 
 
 # Model tiering: cheap models for the high-volume mechanical steps, a stronger
@@ -62,6 +63,11 @@ TASK_MODEL: dict[Task, str] = {
     # Prose an officer signs their name to, so the strong tier like NARRATE.
     Task.EMAIL_DRAFT: settings.gemini_model_strong,
     Task.WORK_ORDER: settings.gemini_model,
+    # The flash tier, despite being conversational prose. A ReAct turn is several
+    # calls, and the strong tier's free quota is 20 a DAY — an officer asking four
+    # questions would exhaust it before lunch. Tool-call selection is a mechanical
+    # choice among six options, which is what flash is good at.
+    Task.OFFICER_CHAT: settings.gemini_model,
 }
 
 # One ceiling for the whole process. Not optional: the Gemini free tier
