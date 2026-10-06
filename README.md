@@ -6,7 +6,12 @@ of twelve categories, scores its risk, routes it to a department and a contracto
 drafts a work order with an SLA deadline, and notifies them. **Every AI decision
 cites the municipal documents it was grounded in.**
 
-904 backend tests, no network and no API key, in about twenty seconds.
+904 backend tests, no network and no API key, in about twenty seconds. "No network"
+is verified rather than assumed — the suite passes inside an empty network namespace:
+
+```bash
+unshare -r -n .venv/bin/python -m pytest -q    # 904 passed
+```
 
 ---
 

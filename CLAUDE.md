@@ -136,7 +136,9 @@ day and leaves little over. `--flash-only` keeps a sweep off the strong tier.
 
 ## Testing
 
-904 tests, no network, no API key, about twenty seconds. Three things to know:
+904 tests, no network, no API key, about twenty seconds. The no-network claim is
+checked, not assumed: `unshare -r -n .venv/bin/python -m pytest -q` passes. Three
+things to know:
 
 - **Fakes everywhere, and a fake looser than reality is worse than none.**
   `FakeEmbedder` is content-hashed, so only *identical* text is similar under it — a
