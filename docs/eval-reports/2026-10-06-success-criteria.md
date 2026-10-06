@@ -12,6 +12,7 @@ rather than against the code that is supposed to implement it.
 | 5 | The three scheduled jobs run and produce real output | ✅ all three, live |
 | 6 | `pytest` passes with no network access | ✅ verified in a network namespace |
 | 7 | Eleven documents exist, referencing real code | ✅ |
+| — | `docker compose up` produces a working system | ✅ verified; seven defects found |
 
 ---
 
@@ -99,3 +100,48 @@ shows a real failure and its retry.
 decorator and run metadata, and `.env.example` documents the variables, but no run in
 this project has been inspected in LangSmith — there has never been a key configured.
 The criterion says "inspectable in both"; only one of the two has been checked.
+
+
+---
+
+## Deployment — verified the same way
+
+The compose stack was reviewed before it could be run, and **five defects** were found
+by reading it against the application's requirements. Each would have stopped it
+starting: a placeholder `SECRET_KEY` against a guard that refuses to boot, a
+`postgresql://` URL with no driver in `requirements.txt`, no migration step, Python
+3.12 against a 3.14 project, and no `GEMINI_API_KEY` passed.
+
+Then it was actually run, and found **two more**:
+
+- **No `.dockerignore` anywhere.** The backend build context was 326 MB, of which 319
+  MB was the host `.venv` — Linux wheels built against the host's Python, sent on every
+  build and then copied into `/app` *after* `pip install`, shadowing the packages just
+  installed. Context after the fix: **1.2 MB**.
+- **No way to create a first tenant.** Seeding was only reachable through
+  `POST /admin/seed`, which is gated on `ENVIRONMENT == "development"` — correct for an
+  unauthenticated writer, and compose runs as production. A fresh stack came up
+  *healthy* with no tenant and no admin user: login failed because the account did not
+  exist, and a complaint failed with "tenant is ambiguous". `python -m app.services.seed`
+  now runs between the migration and the server.
+
+Verified end to end:
+
+```
+civicai-backend-1    Up (healthy)   0.0.0.0:8000->8000/tcp
+civicai-frontend-1   Up             0.0.0.0:3000->80/tcp
+
+6 migrations applied · "seed: Database seeded successfully"
+POST /complaints/ → CIV-084IBGH9 → assigned, ELECTRICITY, medium
+/admin/corpus → 16 documents, 100 chunks, gemini-embedding-001@768
+```
+
+The index is the one step that is not automatic, because it needs the embedding API
+and cannot run at build time. Until it runs the system says so in the startup log, on
+`/admin/corpus` and on every evidence panel, and processes complaints without
+citations rather than refusing to start — ADR 0003 behaving as designed in a
+deployment rather than in a test.
+
+**Five of the seven defects were found by reading and two by running.** The reading
+was worth doing and was not sufficient, which is the same lesson as `docs/07` §5: all
+six application-level production bugs in this project also came from running it.
