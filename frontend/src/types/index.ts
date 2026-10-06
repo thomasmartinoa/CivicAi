@@ -210,3 +210,28 @@ export interface EvidenceCitation {
   snippet: string | null;
   score: number | null;
 }
+
+export interface CorpusDocument {
+  source: string;
+  title: string | null;
+  doc_type: string | null;
+  chunks: number;
+  characters: number;
+  sections: string[];
+}
+
+export interface CorpusStatus {
+  /** false means there is no index. Every node treats retrieval as a soft
+   *  dependency, so this does not stop the pipeline — it silently removes the
+   *  citations from everything processed while it is gone. */
+  available: boolean;
+  collection: string;
+  index_dir: string;
+  embedding_model: string | null;
+  dimensions: number | null;
+  chunk_count: number;
+  document_count: number;
+  built_at: string | null;
+  documents: CorpusDocument[];
+  error: string | null;
+}

@@ -344,3 +344,36 @@ class AgentRunPage(BaseModel):
     page: int
     size: int
     pages: int
+
+
+class CorpusDocument(BaseModel):
+    """One source document in the policy corpus."""
+
+    source: str
+    title: str | None = None
+    doc_type: str | None = None
+    chunks: int
+    characters: int
+    sections: list[str] = []
+    """The distinct top-level headings, so an officer can see what a document covers
+    without opening the file."""
+
+
+class CorpusStatus(BaseModel):
+    """The state of the retrieval index the grounded decisions depend on.
+
+    `available` false is the important case: every node treats retrieval as a soft
+    dependency and carries on without it, so a missing index does not stop the
+    pipeline — it silently removes the citations from everything it processes.
+    """
+
+    available: bool
+    collection: str
+    index_dir: str
+    embedding_model: str | None = None
+    dimensions: int | None = None
+    chunk_count: int = 0
+    document_count: int = 0
+    built_at: datetime | None = None
+    documents: list[CorpusDocument] = []
+    error: str | None = None

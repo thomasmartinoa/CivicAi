@@ -30,7 +30,8 @@ from app.db.models.core import User
 from app.db.session import get_db
 from app.schemas.admin import (
     DESCRIPTION_PREVIEW_CHARS, AdminComplaintDetail, AgentRunDetail, AgentRunPage,
-    AgentRunRow, AgentStepRow, AnalyticsResponse, BriefingResponse,
+    AgentRunRow, AgentStepRow, AnalyticsResponse, BriefingResponse, CorpusDocument,
+    CorpusStatus,
     ComplaintPage, ComplaintRow,
     ComplaintUpdate, WorkOrderUpdate,
     ContractorRow, EmailDraftResponse, EscalationSummary, EvidenceCitation, LoginResponse,
@@ -768,3 +769,76 @@ def run_detail(
                     label=_run_label(tracking_id, opener))
     return AgentRunDetail(**base.model_dump(),
                           steps=[AgentStepRow.model_validate(s) for s in steps])
+
+
+@router.get("/corpus", response_model=CorpusStatus)
+def corpus_status(officer: CurrentOfficer) -> CorpusStatus:
+    """What is in the policy index, and whether there is one.
+
+    Read-only, and deliberately so. A reindex button belongs to the same argument
+    that kept mutation tools out of the officer agent: rebuilding the index is a
+    destructive operation on the thing every grounded decision depends on, and this
+    codebase has no confirmation mechanism yet.
+
+    Reads the index files rather than the database. The FAISS index and its chunk
+    store are the artefacts the retriever actually loads, so a status derived from
+    anything else could say "ready" about an index that is not there.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from app.ai.rag.ingest import COLLECTION, collection_index_dir
+    from app.config import settings
+
+    index_dir = collection_index_dir(settings.rag_index_path, COLLECTION)
+    chunks_path = index_dir / "chunks.json"
+    manifest_path = index_dir / "manifest.json"
+    base = CorpusStatus(available=False, collection=COLLECTION, index_dir=str(index_dir))
+
+    if not chunks_path.exists():
+        base.error = (
+            "No index has been built. Decisions made now will carry no citations — "
+            "run `python -m app.ai.rag.ingest --collection all`."
+        )
+        return base
+
+    try:
+        chunks = json.loads(chunks_path.read_text())
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        base.error = f"The index could not be read: {exc}"
+        return base
+
+    by_source: dict[str, dict] = {}
+    for chunk in chunks:
+        meta = chunk.get("metadata") or {}
+        entry = by_source.setdefault(chunk.get("source", "unknown"), {
+            "title": meta.get("title"), "doc_type": meta.get("doc_type"),
+            "chunks": 0, "characters": 0, "sections": [],
+        })
+        entry["chunks"] += 1
+        entry["characters"] += len(chunk.get("text") or "")
+        headers = meta.get("headers") or []
+        # The first header is the document title on every chunk; the second is the
+        # section, which is the level an officer would recognise.
+        if len(headers) > 1 and headers[1] not in entry["sections"]:
+            entry["sections"].append(headers[1])
+
+    built_at = None
+    if (faiss := index_dir / "index.faiss").exists():
+        built_at = datetime.fromtimestamp(faiss.stat().st_mtime, tz=timezone.utc)
+
+    return CorpusStatus(
+        available=True,
+        collection=COLLECTION,
+        index_dir=str(index_dir),
+        embedding_model=manifest.get("model_tag"),
+        dimensions=manifest.get("dim"),
+        chunk_count=len(chunks),
+        document_count=len(by_source),
+        built_at=built_at,
+        documents=sorted(
+            (CorpusDocument(source=source, **entry) for source, entry in by_source.items()),
+            key=lambda d: d.source,
+        ),
+    )

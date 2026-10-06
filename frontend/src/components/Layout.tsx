@@ -13,6 +13,7 @@ const OFFICER_LINKS = [
   { to: '/admin/work-orders', label: 'Work orders' },
   { to: '/admin/chat', label: 'Assistant' },
   { to: '/admin/runs', label: 'Traces' },
+  { to: '/admin/corpus', label: 'Knowledge' },
 ];
 
 export default function Layout() {
