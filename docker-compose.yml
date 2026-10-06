@@ -1,34 +1,82 @@
-version: "3.8"
+# One command to run CivicAI.
+#
+# NOT VERIFIED BY RUNNING IT. Docker is not installed on the machine this was
+# written on, so this file is reviewed against the application's actual
+# requirements rather than tested. Five defects in the previous version were found
+# that way and are fixed below; there may be more that only `docker compose up`
+# would show.
+#
+#   SECRET_KEY=$(openssl rand -hex 32) GEMINI_API_KEY=... docker compose up --build
+#
+# Both variables matter:
+#   - SECRET_KEY: `environment` defaults to "production" and `secret_key` to a known
+#     placeholder, and app/main.py refuses to boot on that combination. Without it the
+#     backend crash-loops, which is exactly what the previous version of this file did.
+#   - GEMINI_API_KEY: without it the API still boots and complaints are still accepted,
+#     but every pipeline run fails at its first model call.
 
 services:
-  db:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: civicai
-      POSTGRES_PASSWORD: civicai
-      POSTGRES_DB: civicai
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
   backend:
     build: ./backend
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://civicai:civicai@db:5432/civicai
-    depends_on:
-      - db
+      # SQLite, because that is what this project actually runs on. See the
+      # commented postgres service below for why it is not the default.
+      DATABASE_URL: sqlite:////data/civicai.db
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY, e.g. $(openssl rand -hex 32)}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      BACKGROUND_JOBS_ENABLED: ${BACKGROUND_JOBS_ENABLED:-true}
+      RAG_INDEX_DIR: /data/index
     volumes:
       - ./backend/uploads:/app/uploads
+      # The database and the FAISS index both live here. Without a volume the index
+      # is rebuilt — at an embedding-API cost — every time the container is replaced.
+      - civicai-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
 
   frontend:
     build: ./frontend
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
-  pgdata:
+  civicai-data:
+
+# ── Postgres is deliberately not the default ────────────────────────────────
+#
+# The models were written to work on both (String(36) ids rather than a PG UUID
+# type, JSON rather than ARRAY), but:
+#
+#   1. requirements.txt contains no Postgres driver, so a postgresql:// URL fails
+#      at import with "No module named psycopg2". The previous version of this file
+#      pointed the backend at Postgres anyway.
+#   2. No migration has ever been run against Postgres, and two of them use
+#      batch_alter_table, which exists for SQLite's benefit.
+#   3. No test runs against Postgres.
+#
+# Making it the default would be claiming something untested. To use it: add
+# `psycopg[binary]` to requirements.txt, set DATABASE_URL, run the migrations, and
+# expect to find things.
+#
+#  db:
+#    image: postgres:16
+#    environment:
+#      POSTGRES_USER: civicai
+#      POSTGRES_PASSWORD: civicai
+#      POSTGRES_DB: civicai
+#    volumes:
+#      - pgdata:/var/lib/postgresql/data
+#    healthcheck:
+#      test: ["CMD-SHELL", "pg_isready -U civicai"]
+#      interval: 5s
+#      retries: 10
