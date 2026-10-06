@@ -198,3 +198,15 @@ export interface AgentRun {
 export interface AgentRunDetail extends AgentRun {
   steps: AgentStep[];
 }
+
+
+/** One citation behind a pipeline decision, as /admin/complaints/{id} sends it. */
+export interface EvidenceCitation {
+  /** Which node retrieved it: validate, classify, assess_risk, route, work_order. */
+  node: string;
+  source: string;
+  /** `source › headers`, the form the graph records and the assistant quotes. */
+  citation: string | null;
+  snippet: string | null;
+  score: number | null;
+}

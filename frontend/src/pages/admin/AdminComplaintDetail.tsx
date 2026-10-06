@@ -1,3 +1,4 @@
+import type { EvidenceCitation } from '../../types';
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -71,8 +72,6 @@ export default function AdminComplaintDetail() {
       </div>
     );
   }
-
-  const aiAnalysis = data.ai_analysis || {};
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -178,43 +177,112 @@ export default function AdminComplaintDetail() {
         </div>
       </div>
 
-      {/* AI Analysis */}
-      {Object.keys(aiAnalysis).length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">AI Analysis</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {aiAnalysis.classification && (
-              <div className="bg-blue-50 rounded-lg p-4">
-                <p className="text-xs font-medium text-blue-600 uppercase mb-2">Classification</p>
-                <p className="text-sm text-gray-800">{aiAnalysis.classification.category} / {aiAnalysis.classification.subcategory}</p>
-                <p className="text-xs text-gray-500 mt-1">Confidence: {((aiAnalysis.classification.confidence || 0) * 100).toFixed(0)}%</p>
-                {aiAnalysis.classification.reasoning && (
-                  <p className="text-xs text-gray-500 mt-1">{aiAnalysis.classification.reasoning}</p>
-                )}
-              </div>
-            )}
-            {aiAnalysis.risk_assessment && (
-              <div className="bg-orange-50 rounded-lg p-4">
-                <p className="text-xs font-medium text-orange-600 uppercase mb-2">Risk Assessment</p>
-                <p className="text-sm text-gray-800">Score: {aiAnalysis.risk_assessment.priority_score}/100</p>
-                <p className="text-xs text-gray-500 mt-1">Level: {aiAnalysis.risk_assessment.risk_level}</p>
-                {aiAnalysis.risk_assessment.reasoning && (
-                  <p className="text-xs text-gray-500 mt-1">{aiAnalysis.risk_assessment.reasoning}</p>
-                )}
-              </div>
-            )}
-            {aiAnalysis.routing && (
-              <div className="bg-purple-50 rounded-lg p-4">
-                <p className="text-xs font-medium text-purple-600 uppercase mb-2">Routing</p>
-                <p className="text-sm text-gray-800">{aiAnalysis.routing.department_name}</p>
-                {aiAnalysis.routing.contractor_name && (
-                  <p className="text-xs text-gray-500 mt-1">Contractor: {aiAnalysis.routing.contractor_name}</p>
-                )}
-              </div>
+      {/* What the pipeline decided, and what it cited.
+
+          Replaces a block that read a nested `ai_analysis` object the v2 API has
+          never sent — classification, risk and routing live on the complaint itself,
+          and the citations behind them live in `evidence`. The old block rendered
+          nothing at all, which is why four phases of grounding work have been
+          invisible. */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-gray-800 mb-4">What the pipeline decided</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-blue-50 rounded-lg p-4">
+            <p className="text-xs font-medium text-blue-600 uppercase mb-2">Classification</p>
+            <p className="text-sm text-gray-800">
+              {data.category ?? 'not classified'}
+              {data.subcategory ? ` / ${data.subcategory}` : ''}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              {/* Null means the model never ran, which is not the same as 0%
+                  confidence — one is an absent judgement, the other a bad one. */}
+              {data.classification_confidence == null
+                ? 'Confidence not recorded'
+                : `Confidence ${(data.classification_confidence * 100).toFixed(0)}%`}
+            </p>
+          </div>
+
+          <div className="bg-orange-50 rounded-lg p-4">
+            <p className="text-xs font-medium text-orange-600 uppercase mb-2">Risk</p>
+            <p className="text-sm text-gray-800 capitalize">{data.risk_level ?? 'not assessed'}</p>
+            <p className="text-xs text-gray-500 mt-1">
+              {data.priority_score == null ? 'No score' : `Priority ${data.priority_score}/100`}
+            </p>
+          </div>
+
+          <div className="bg-purple-50 rounded-lg p-4">
+            <p className="text-xs font-medium text-purple-600 uppercase mb-2">Routing</p>
+            <p className="text-sm text-gray-800">
+              {data.work_order?.contractor_name ?? 'No contractor assigned'}
+            </p>
+            {data.work_order?.sla_hours != null && (
+              <p className="text-xs text-gray-500 mt-1">
+                {data.work_order.sla_hours}h SLA · {data.work_order.sla_state}
+              </p>
             )}
           </div>
         </div>
-      )}
+
+        {/* The justification route wrote, with its [n] markers pointing into the
+            citations below. This sentence is what an officer is accountable for. */}
+        {data.routing_justification && (
+          <div className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-4">
+            <p className="text-xs font-medium text-gray-500 uppercase mb-2">Justification</p>
+            <p className="text-sm text-gray-800">{data.routing_justification}</p>
+          </div>
+        )}
+
+        {data.terminal_reason && (
+          <div className="mt-4 bg-amber-50 border border-amber-300 rounded-lg p-4">
+            <p className="text-xs font-medium text-amber-800 uppercase mb-1">
+              Rejected — not a failure
+            </p>
+            <p className="text-sm text-gray-800">{data.terminal_reason}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Evidence */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-gray-800">Evidence</h2>
+        <p className="text-sm text-gray-500 mt-1 mb-4">
+          The municipal documents each decision was grounded in. A decision with no
+          citation was made without one.
+        </p>
+
+        {(!data.evidence || data.evidence.length === 0) ? (
+          /* Said plainly rather than hidden. Retrieval is a soft dependency — a
+             complaint processed while the index was unavailable is routed on the
+             model's own judgement, and an officer should be able to see that. */
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+            No citations recorded. This complaint was processed without retrieval, so
+            its decisions are ungrounded.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {data.evidence.map((item: EvidenceCitation, index: number) => (
+              <div key={index} className="border border-gray-200 rounded-lg p-4">
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  <span className="text-xs font-semibold px-2 py-1 rounded bg-gray-100 text-gray-700">
+                    {item.node}
+                  </span>
+                  <span className="text-xs font-mono text-gray-600 break-all">
+                    {item.citation || item.source}
+                  </span>
+                  {item.score != null && (
+                    <span className="text-xs text-gray-400 ml-auto">
+                      relevance {item.score.toFixed(3)}
+                    </span>
+                  )}
+                </div>
+                {item.snippet && (
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{item.snippet}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Attachments */}
       {data.media && data.media.length > 0 && (
@@ -280,7 +348,7 @@ export default function AdminComplaintDetail() {
       {/* Email Draft Section */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-800">Email Draft to {data.department_name}</h2>
+          <h2 className="text-lg font-semibold text-gray-800">Email draft to the department</h2>
           <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
             emailStatus === 'approved' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
           }`}>
