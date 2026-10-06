@@ -29,7 +29,8 @@ from app.db.models.complaint import Complaint
 from app.db.models.core import User
 from app.db.session import get_db
 from app.schemas.admin import (
-    DESCRIPTION_PREVIEW_CHARS, AdminComplaintDetail, AnalyticsResponse, BriefingResponse,
+    DESCRIPTION_PREVIEW_CHARS, AdminComplaintDetail, AgentRunDetail, AgentRunPage,
+    AgentRunRow, AgentStepRow, AnalyticsResponse, BriefingResponse,
     ComplaintPage, ComplaintRow,
     ComplaintUpdate, WorkOrderUpdate,
     ContractorRow, EmailDraftResponse, EscalationSummary, EvidenceCitation, LoginResponse,
@@ -642,3 +643,100 @@ def update_work_order(
         cluster_size=order.cluster_size, created_at=order.created_at,
         completed_at=order.completed_at, completion_photo=order.completion_photo,
     )
+
+
+def _run_row(run, *, tracking_id: str | None, step_count: int) -> AgentRunRow:
+    """One run, with `kind` derived rather than left for the caller to infer.
+
+    A chat run is distinguished in the database by `complaint_id IS NULL`, which is
+    the right storage decision and the wrong thing to make a frontend know.
+    """
+    return AgentRunRow(
+        id=run.id, complaint_id=run.complaint_id, tracking_id=tracking_id,
+        kind="pipeline" if run.complaint_id else "chat",
+        thread_id=run.thread_id, status=run.status, graph_version=run.graph_version,
+        started_at=run.started_at, finished_at=run.finished_at,
+        duration_ms=run.duration_ms, error=run.error, step_count=step_count,
+    )
+
+
+@router.get("/runs", response_model=AgentRunPage)
+def list_runs(
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+    complaint_id: str | None = None,
+    kind: Annotated[str | None, Query(description="pipeline|chat")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 25,
+) -> AgentRunPage:
+    """Agent runs, newest first.
+
+    **Scoped by joining to the complaint, not by a column on the run.** `agent_runs`
+    has no `tenant_id`, so filtering it directly would return every tenant's runs.
+    A chat run has no complaint to join to, so it is scoped by its `thread_id`, which
+    `chat_log` writes as `chat:<officer_id>:<nonce>` — an officer sees their own
+    conversations and not their colleagues'.
+    """
+    from sqlalchemy import func
+
+    from app.db.models.ai import AgentRun, AgentStep
+
+    counts = (db.query(AgentStep.run_id, func.count(AgentStep.id).label("n"))
+              .group_by(AgentStep.run_id).subquery())
+
+    query = (db.query(AgentRun, Complaint.tracking_id, counts.c.n)
+             .outerjoin(Complaint, Complaint.id == AgentRun.complaint_id)
+             .outerjoin(counts, counts.c.run_id == AgentRun.id))
+
+    mine = AgentRun.thread_id.like(f"chat:{officer.id}:%")
+    theirs = Complaint.tenant_id == officer.tenant_id
+    if kind == "chat":
+        query = query.filter(AgentRun.complaint_id.is_(None), mine)
+    elif kind == "pipeline":
+        query = query.filter(AgentRun.complaint_id.isnot(None), theirs)
+    else:
+        query = query.filter((AgentRun.complaint_id.is_(None) & mine) | theirs)
+
+    if complaint_id:
+        query = query.filter(AgentRun.complaint_id == complaint_id)
+
+    total = query.order_by(None).count()
+    rows = (query.order_by(AgentRun.started_at.desc())
+            .offset((page - 1) * size).limit(size).all())
+    return AgentRunPage(
+        items=[_run_row(run, tracking_id=tracking, step_count=n or 0)
+               for run, tracking, n in rows],
+        total=total, page=page, size=size,
+        pages=math.ceil(total / size) if total else 0,
+    )
+
+
+@router.get("/runs/{run_id}", response_model=AgentRunDetail)
+def run_detail(
+    run_id: str,
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+) -> AgentRunDetail:
+    """One run with its full step timeline, in sequence."""
+    from app.db.models.ai import AgentRun, AgentStep
+
+    run = db.query(AgentRun).filter(AgentRun.id == run_id).one_or_none()
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    tracking_id = None
+    if run.complaint_id:
+        complaint = db.query(Complaint).filter(Complaint.id == run.complaint_id).one_or_none()
+        # 404 rather than 403 for another tenant's run, as everywhere else: saying it
+        # exists would confirm the id is real somewhere in the system.
+        if complaint is None or complaint.tenant_id != officer.tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        tracking_id = complaint.tracking_id
+    elif not run.thread_id.startswith(f"chat:{officer.id}:"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    steps = (db.query(AgentStep).filter(AgentStep.run_id == run.id)
+             .order_by(AgentStep.seq).all())
+    base = _run_row(run, tracking_id=tracking_id, step_count=len(steps))
+    return AgentRunDetail(**base.model_dump(),
+                          steps=[AgentStepRow.model_validate(s) for s in steps])

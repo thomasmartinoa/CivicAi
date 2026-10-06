@@ -285,3 +285,58 @@ class WorkOrderUpdate(BaseModel):
     status: str | None = None
     actual_cost: float | None = None
     notes: str | None = None
+
+
+class AgentStepRow(BaseModel):
+    """One step in a run's timeline.
+
+    `status` carries `step_limit` for a chat turn the agent gave up on. That value
+    exists so a trace viewer can show a surrender as a surrender — rendered as
+    `completed`, an agent that ran out of steps looks like one that finished.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    seq: int
+    node: str
+    status: str
+    duration_ms: int | None = None
+    tokens: int | None = None
+    input_summary: str | None = None
+    output_summary: str | None = None
+    error: str | None = None
+    created_at: datetime
+
+
+class AgentRunRow(BaseModel):
+    """A run, with enough to list it without loading its steps."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    complaint_id: str | None = None
+    tracking_id: str | None = None
+    """None for a chat run, which belongs to no single complaint."""
+    kind: str
+    """`pipeline` or `chat`, derived from whether a complaint is named. A caller
+    should not have to know that `complaint_id IS NULL` means a conversation."""
+    thread_id: str
+    status: str
+    graph_version: str | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
+    error: str | None = None
+    step_count: int = 0
+
+
+class AgentRunDetail(AgentRunRow):
+    steps: list[AgentStepRow] = []
+
+
+class AgentRunPage(BaseModel):
+    items: list[AgentRunRow]
+    total: int
+    page: int
+    size: int
+    pages: int
