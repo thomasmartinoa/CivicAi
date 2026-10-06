@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { watchComplaint, type NodeUpdate } from '../../services/complaintStream';
 import { trackComplaint, requestOTP, verifyOTP, getMyComplaints, rateComplaint, verifyComplaintFixed, API_BASE_URL } from '../../services/api';
 import type { Complaint } from '../../types';
 
@@ -14,25 +15,39 @@ const STATUS_STEPS = [
   { key: 'closed',      label: 'Closed',      desc: 'Confirmed complete' },
 ];
 
-// Ordered pipeline stages for the visual tracker
-const PIPELINE_STAGES = [
-  { key: 'submitted',   label: 'Submitted' },
-  { key: 'validated',   label: 'Verified' },
-  { key: 'classified',  label: 'AI Processed' },
-  { key: 'assigned',    label: 'Assigned' },
-  { key: 'in_progress', label: 'In Progress' },
-  { key: 'resolved',    label: 'Resolved' },
+/** The pipeline as a citizen should see it.
+ *
+ * These are the graph's real nodes, grouped and renamed. The previous list used v1
+ * stage names the v2 graph never writes — `validated`, `classified`, `routed` — so
+ * the lookup fell through to 0 for the whole run and the bar sat at "Submitted"
+ * until the complaint was finished, then jumped to the end.
+ *
+ * `investigate` shares a stage with `classify` deliberately: it is the re-read loop
+ * for an unsure classification, and a citizen does not need to watch the system
+ * change its mind. */
+const PIPELINE_STAGES: { label: string; nodes: string[] }[] = [
+  { label: 'Received', nodes: ['intake'] },
+  { label: 'Media', nodes: ['analyse_media'] },
+  { label: 'Checking', nodes: ['validate'] },
+  { label: 'Identifying', nodes: ['classify', 'investigate'] },
+  { label: 'Urgency', nodes: ['assess_risk'] },
+  { label: 'Assigning', nodes: ['route'] },
+  { label: 'Work order', nodes: ['work_order'] },
+  { label: 'Notified', nodes: ['notify'] },
 ];
 
-function getStepIndex(status: string): number {
-  const pipelineKeys = PIPELINE_STAGES.map(s => s.key);
-  const idx = pipelineKeys.indexOf(status);
-  if (idx !== -1) return idx;
-  // map aliases
-  if (['routed', 'work_order_created'].includes(status)) return 3;
-  if (['grouped', 'escalated'].includes(status)) return 3;
-  if (status === 'closed') return 5;
-  return 0;
+const NODE_STAGE: Record<string, number> = Object.fromEntries(
+  PIPELINE_STAGES.flatMap((stage, index) => stage.nodes.map((node) => [node, index])),
+);
+
+/** How far a *finished* complaint got, for a page opened after the run ended.
+ *
+ * The socket only carries a live run, so without this a citizen opening their
+ * tracking link an hour later would see an empty progress bar. */
+function stageFromStatus(status: string): number {
+  if (status === 'submitted') return 0;
+  if (status === 'rejected' || status === 'failed') return 2;  // reached `validate`
+  return PIPELINE_STAGES.length - 1;
 }
 
 const riskColor: Record<string, string> = {
@@ -52,30 +67,36 @@ const statusBadge: Record<string, string> = {
   grouped: 'bg-blue-100 text-blue-800',
 };
 
-function ProgressTimeline({ status }: { status: string }) {
-  const currentIdx = getStepIndex(status);
+function ProgressTimeline({ status, reached, rejected }: {
+  status: string;
+  /** The furthest stage a live update has reported, or -1 if none has. */
+  reached: number;
+  rejected: boolean;
+}) {
+  // A live update wins over the stored status: the socket is ahead of the database
+  // during a run, and behind it for a complaint that finished before the page opened.
+  const currentIdx = Math.max(reached, stageFromStatus(status));
   return (
     <div className="mt-4 mb-2">
-      <div className="flex items-center">
+      <div className="flex items-start">
         {PIPELINE_STAGES.map((stage, idx) => {
           const done = idx <= currentIdx;
-          const active = idx === currentIdx;
+          const active = idx === currentIdx && !rejected && status === 'submitted';
+          // A rejected complaint stopped at `validate`. Colouring the later stages as
+          // merely pending would suggest they are still coming.
+          const blocked = rejected && idx > 2;
           return (
-            <div key={stage.key} className="flex items-center flex-1 last:flex-none">
-              <div className="flex flex-col items-center">
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-colors ${
-                  done
-                    ? 'bg-blue-900 border-blue-900 text-white'
-                    : 'bg-white border-gray-300 text-gray-400'
-                } ${active ? 'ring-2 ring-blue-300 ring-offset-1' : ''}`}>
-                  {done ? (idx < currentIdx ? '\u2713' : (idx + 1)) : (idx + 1)}
+            <div key={stage.label} className="flex items-center flex-1 last:flex-none">
+              <div className="flex flex-col items-center w-14">
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-colors ${blocked ? 'border-gray-200 text-gray-300' : done ? 'bg-blue-900 border-blue-900 text-white' : 'border-gray-300 text-gray-400'} ${active ? 'ring-4 ring-blue-200 animate-pulse' : ''}`}>
+                  {blocked ? '\u2013' : done ? '\u2713' : idx + 1}
                 </div>
-                <span className={`mt-1 text-xs text-center leading-tight ${done ? 'text-blue-900 font-medium' : 'text-gray-400'}`}>
+                <span className={`mt-1 text-[10px] text-center leading-tight ${blocked ? 'text-gray-300' : done ? 'text-blue-900 font-medium' : 'text-gray-400'}`}>
                   {stage.label}
                 </span>
               </div>
               {idx < PIPELINE_STAGES.length - 1 && (
-                <div className={`flex-1 h-0.5 mx-1 mt-[-12px] transition-colors ${idx < currentIdx ? 'bg-blue-900' : 'bg-gray-200'}`} />
+                <div className={`flex-1 h-0.5 mx-1 mt-[-12px] transition-colors ${idx < currentIdx && !blocked ? 'bg-blue-900' : 'bg-gray-200'}`} />
               )}
             </div>
           );
@@ -89,6 +110,24 @@ function ComplaintCard({ c: initialC, onToggle }: { c: Complaint; expanded: bool
   const [c, setC] = useState<Complaint>(initialC);
   const stepDesc = STATUS_STEPS.find(s => s.key === c.status)?.desc || 'Processing';
   const images = (c.media || []).filter(m => m.media_type === 'image');
+
+  // Live pipeline progress. The socket carries one update per graph node, and the
+  // backend has published them since Phase 1 with nothing listening.
+  const [reached, setReached] = useState(-1);
+  const [liveNote, setLiveNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Only while the run can still be going. Opening a socket for a complaint that
+    // finished last week connects, receives nothing, and sits there.
+    if (c.status !== 'submitted') return undefined;
+    return watchComplaint(c.tracking_id, (update: NodeUpdate) => {
+      const stage = NODE_STAGE[update.node];
+      // Math.max, not assignment: analyse_media branches fan out and can report
+      // after a later node, and a bar that goes backwards looks broken.
+      if (stage !== undefined) setReached((prev) => Math.max(prev, stage));
+      if (update.summary) setLiveNote(update.summary);
+    });
+  }, [c.tracking_id, c.status]);
 
   const verifyMutation = useMutation({
     mutationFn: (isFixed: boolean) => verifyComplaintFixed(c.tracking_id, isFixed),
@@ -124,7 +163,18 @@ function ComplaintCard({ c: initialC, onToggle }: { c: Complaint; expanded: bool
         </div>
       )}
 
-      <ProgressTimeline status={c.status} />
+      <ProgressTimeline
+        status={c.status}
+        reached={reached}
+        rejected={c.status === 'rejected'}
+      />
+      {/* The node's own decision text, which is the only place a citizen sees the
+          system explain itself while it is still working. */}
+      {liveNote && c.status === 'submitted' && (
+        <p className="text-xs text-blue-800 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 mb-2">
+          {liveNote}
+        </p>
+      )}
 
       <p className="text-xs text-gray-500 mb-3 italic">{stepDesc}</p>
 
