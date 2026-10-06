@@ -22,6 +22,7 @@ should treat that as a failure.
 
 import json
 import logging
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -59,6 +60,26 @@ def _policy_retriever():
     from app.ai.graph.runner import _POLICY_RETRIEVER
 
     return _POLICY_RETRIEVER
+
+
+def _record(**kwargs) -> None:
+    """Persist the turn, and never let a logging failure break the stream.
+
+    The officer has their answer by the time this runs. A database error here is
+    worth a stack trace in the log and nothing else — turning it into a failed
+    response would mean losing an answer that already arrived because recording it
+    went wrong.
+    """
+    from app.services.chat_log import record_chat_turn
+
+    session = _session_factory()()
+    try:
+        record_chat_turn(session, **kwargs)
+    except Exception:
+        logger.exception("could not record an officer chat turn")
+        session.rollback()
+    finally:
+        session.close()
 
 
 def _frame(event: str, payload: dict) -> str:
@@ -108,17 +129,49 @@ async def officer_chat(
     officer_id = officer.id
 
     async def events():
+        # Accumulated as the events go out, then written once at the end. Writing a
+        # row per event would put a database round trip between the officer and each
+        # token of the answer.
+        from app.ai.agents.officer_chat import ToolCall
+
+        started = time.monotonic()
+        calls: list[ToolCall] = []
+        answer = ""
+        failure: str | None = None
+        hit_limit = False
+
         try:
             async for event, data in stream_officer_chat(question, agent=agent,
                                                          history=history):
+                if event == "tool_call":
+                    calls.append(ToolCall(name=data["name"], args=data["args"]))
+                elif event == "tool_result":
+                    # Matched by name against the most recent call of that name:
+                    # the stream has already flattened the tool_call_ids away, and a
+                    # transcript does not need to disambiguate two identical calls.
+                    for call in reversed(calls):
+                        if call.name == data["name"] and call.result is None:
+                            call.result = data["result"]
+                            break
+                elif event == "answer":
+                    answer = data.get("text", "")
+                    hit_limit = bool(data.get("hit_step_limit"))
+                elif event == "error":
+                    failure = data.get("message")
                 yield _frame(event, data)
-        except Exception:
+        except Exception as exc:
             # stream_officer_chat traps provider errors itself; this is the backstop
             # for anything it does not, and it must still frame an event rather than
             # drop a 200 response with no explanation.
             logger.exception("the officer chat stream failed for officer %s", officer_id)
+            failure = f"{type(exc).__name__}: {exc}"
             yield _frame("error", {"message": "The assistant is unavailable."})
         finally:
+            _record(
+                officer_id=officer_id, question=question, answer=answer,
+                tool_calls=calls, duration_ms=int((time.monotonic() - started) * 1000),
+                error=failure, hit_step_limit=hit_limit,
+            )
             yield _frame("done", {})
 
     return StreamingResponse(

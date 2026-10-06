@@ -308,3 +308,71 @@ def test_history_is_replayed_to_the_model(client, auth, wire):
     ])
     seen = wire["model"].turns
     assert seen, "the model was called"
+
+
+# ── the transcript ──────────────────────────────────────────────────────────
+
+
+def test_a_turn_is_recorded_with_its_tool_calls(client, auth, wire, db_session, officer):
+    from app.db.models.ai import AgentRun, AgentStep
+
+    db_session.add(Complaint(tracking_id="CIV-LOGGED01", tenant_id=officer.tenant_id,
+                             citizen_email="a@b.com", description="a blocked drain",
+                             category="WATER", status="assigned"))
+    db_session.commit()
+
+    wire["script"] = [
+        AIMessage(content="", tool_calls=[{"name": "find_complaints",
+                                           "args": {"category": "WATER"},
+                                           "id": "t1", "type": "tool_call"}]),
+        AIMessage(content="One WATER complaint."),
+    ]
+    _ask(client, auth, "show me water complaints")
+
+    run = (db_session.query(AgentRun).filter(AgentRun.complaint_id.is_(None))
+           .order_by(AgentRun.started_at.desc()).first())
+    assert run is not None and run.status == "completed"
+    assert run.thread_id.startswith(f"chat:{officer.id}:")
+
+    steps = (db_session.query(AgentStep).filter_by(run_id=run.id)
+             .order_by(AgentStep.seq).all())
+    assert [s.node for s in steps] == ["question", "find_complaints"]
+    assert steps[0].input_summary == "show me water complaints"
+    assert steps[0].output_summary == "One WATER complaint."
+    assert "CIV-LOGGED01" in steps[1].output_summary
+
+
+def test_a_failed_turn_is_recorded_as_failed(client, auth, wire, monkeypatch, db_session):
+    from app.db.models.ai import AgentRun
+    import app.api.chat as chat_module
+
+    class Exploding(ScriptedModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            raise RuntimeError("503 UNAVAILABLE")
+
+    monkeypatch.setattr(chat_module, "_chat_model", lambda: Exploding(script=[], turns=[]))
+    _ask(client, auth)
+
+    run = (db_session.query(AgentRun).filter(AgentRun.complaint_id.is_(None))
+           .order_by(AgentRun.started_at.desc()).first())
+    assert run is not None and run.status == "failed"
+    assert run.error
+
+
+def test_a_recording_failure_does_not_cost_the_officer_their_answer(
+        client, auth, wire, monkeypatch):
+    """The answer has already been streamed by the time the turn is recorded.
+    Turning a database error into a failed response would mean losing an answer that
+    arrived because writing it down went wrong."""
+    import app.services.chat_log as chat_log
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("the disk is full")
+
+    monkeypatch.setattr(chat_log, "record_chat_turn", explode)
+
+    response = _ask(client, auth)
+    assert response.status_code == 200
+    events = _events(response)
+    assert [name for name, _ in events] == ["answer", "done"]
+    assert events[0][1]["text"] == "Nothing is overdue."
