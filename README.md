@@ -63,53 +63,85 @@ failed in 20ms without calling the model at all, and the fix working at 28s.
 
 ## Running it
 
+### Docker — one command
+
+Verified end to end: it migrates, seeds, and serves.
+
+```bash
+SECRET_KEY=$(openssl rand -hex 32) GEMINI_API_KEY=<your key> docker compose up --build
+```
+
+Frontend on **:3000**, API on **:8000**, login `admin@civicai.gov` / `admin123`.
+
+Then **once**, to build the retrieval index. It needs the embedding API, so it cannot
+be a build step; the `/data` volume keeps it across restarts:
+
+```bash
+docker exec civicai-backend-1 python -m app.ai.rag.ingest --collection all
+```
+
+> `docker compose exec` re-interpolates `docker-compose.yml` and so wants `SECRET_KEY`
+> set too. `docker exec` on the container name does not.
+
+### Locally
+
 ```bash
 # Backend — 31 routes, 18 tables, 6 migrations
 cd backend
 python -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt   # -m pip, not .venv/bin/pip
-cp .env.example .env            # add GEMINI_API_KEY for anything live
+.venv/bin/python -m pip install -r requirements.txt
+cp .env.example .env                                     # add GEMINI_API_KEY
 .venv/bin/python -m alembic upgrade head
 .venv/bin/python -m app.services.seed                    # tenant, departments, contractors
 .venv/bin/python -m app.ai.rag.ingest --collection all   # build the FAISS index
-.venv/bin/python -m uvicorn app.main:app --reload
+.venv/bin/python -m uvicorn app.main:app --reload        # :8000
 
 # Frontend
-cd frontend && npm install && npm run dev
+cd frontend && npm install && npm run dev                # :5173
 ```
 
-Seeded officer login: `admin@civicai.gov` / `admin123`.
+### Three things that are not optional, and one that is
 
-> `.venv/bin/python -m pip` rather than `.venv/bin/pip`: the console scripts in a
-> virtualenv carry an **absolute** shebang, so moving the project directory breaks
-> every one of them — `bad interpreter: …/.venv/bin/python3: no such file or
-> directory`. Re-running `python -m venv .venv` rewrites `pyvenv.cfg` and does **not**
-> rewrite those shebangs, so it looks like it should have fixed it and does not.
-> `python -m pip` never reads a shebang. To repair an existing venv properly:
-> `rm -rf .venv && python -m venv .venv`.
+**Seeding is not optional.** Without it there is no tenant, and a submitted complaint
+fails with `tenant is ambiguous` — the backend refusing to guess which municipality a
+report belongs to rather than picking one.
 
-**Or in Docker**, which does the migrate/seed/serve sequence itself:
+**Migrating is not optional.** Without it the database has no tables.
+
+**The index is not optional if you want citations.** Without it complaints are still
+validated, classified, scored and routed — on the model's own judgement, with no
+citations at all. The system says so in three places rather than failing quietly: the
+startup log, `GET /admin/corpus`, and every complaint's evidence panel. That is
+deliberate; see [ADR 0003](docs/adr/0003-retrieval-is-a-soft-dependency.md).
+
+**`GEMINI_API_KEY` is optional for everything except AI.** The API boots, the tests
+pass, and complaints are accepted — each run then fails at its first model call and is
+retried on the next restart.
+
+### If `.venv/bin/pip` says `bad interpreter`
+
+Every console script in a virtualenv carries an **absolute** shebang, so moving the
+project directory breaks all of them at once — `pip`, `pytest`, `alembic`, `uvicorn`.
+
+The trap is that the obvious repair looks like it worked. Re-running
+`python -m venv .venv` regenerates `pyvenv.cfg` with the correct path and leaves the
+existing scripts pointing at the old one. `.venv/bin/python` is a symlink rather than
+a script, so it keeps working and hides the problem.
+
+Either rewrite the shebangs:
 
 ```bash
-SECRET_KEY=$(openssl rand -hex 32) GEMINI_API_KEY=... docker compose up --build
-# frontend on :3000, API on :8000
-
-# Once, to build the retrieval index. It needs the Gemini embedding API, so it
-# cannot be a build step; the volume keeps it across restarts.
-docker exec civicai-backend-1 python -m app.ai.rag.ingest --collection all
+cd backend
+grep -rl '^#!/old/path/to' .venv/bin/ | xargs sed -i '1s|^#!/old/path/to|#!'"$PWD"'|'
 ```
 
-Until that runs, the API reports it plainly — on startup, on `GET /admin/corpus`, and
-on every complaint's evidence panel. Complaints are still processed; their decisions
-simply carry no citations.
+or rebuild the environment:
 
-The seed step is not optional. Without it there is no tenant, and a submitted
-complaint fails with "tenant is ambiguous" — the backend refusing to guess which
-municipality a report belongs to.
+```bash
+rm -rf .venv && python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+```
 
-Without a `GEMINI_API_KEY` the API still boots, the tests still pass, and complaint
-submission still works — the graph fails at its first model call and the complaint is
-retried on the next restart.
+`python -m pip` never reads a shebang, which is why the commands above use it.
 
 ---
 
