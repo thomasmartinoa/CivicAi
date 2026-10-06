@@ -1,17 +1,21 @@
 # One command to run CivicAI.
 #
-# NOT VERIFIED BY RUNNING IT. This file is reviewed against the application's actual
-# requirements rather than tested — the machine it was written on has the docker
-# binary but no running daemon, no compose plugin, and a user outside the docker
-# group. Five defects in the previous version were found by review and are fixed
-# below; there may be more that only `docker compose up` would show.
-#
-# To verify it (Arch/CachyOS):
-#   sudo pacman -S --needed docker-compose
-#   sudo systemctl enable --now docker
-#   sudo usermod -aG docker "$USER"   # then log out and back in, or: newgrp docker
+# VERIFIED 2026-10-06: both images build, the stack comes up healthy, migrations and
+# seeding run, and a complaint submitted to the container was classified ELECTRICITY
+# and assigned. Review found five defects before it was ever run; running it found two
+# more — no .dockerignore (a 319 MB host virtualenv in the build context) and no way to
+# seed a first tenant, because the HTTP seed endpoint is gated on
+# ENVIRONMENT=development.
 #
 #   SECRET_KEY=$(openssl rand -hex 32) GEMINI_API_KEY=... docker compose up --build
+#
+# Then once, to build the retrieval index. It needs the embedding API, so it cannot be
+# a build step; the /data volume keeps it across restarts:
+#
+#   docker exec civicai-backend-1 python -m app.ai.rag.ingest --collection all
+#
+# Note: `docker compose exec` re-interpolates this file, so it wants SECRET_KEY set
+# too. `docker exec` on the container name does not.
 #
 # Both variables matter:
 #   - SECRET_KEY: `environment` defaults to "production" and `secret_key` to a known

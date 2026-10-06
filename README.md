@@ -84,7 +84,15 @@ Seeded officer login: `admin@civicai.gov` / `admin123`.
 ```bash
 SECRET_KEY=$(openssl rand -hex 32) GEMINI_API_KEY=... docker compose up --build
 # frontend on :3000, API on :8000
+
+# Once, to build the retrieval index. It needs the Gemini embedding API, so it
+# cannot be a build step; the volume keeps it across restarts.
+docker exec civicai-backend-1 python -m app.ai.rag.ingest --collection all
 ```
+
+Until that runs, the API reports it plainly — on startup, on `GET /admin/corpus`, and
+on every complaint's evidence panel. Complaints are still processed; their decisions
+simply carry no citations.
 
 The seed step is not optional. Without it there is no tenant, and a submitted
 complaint fails with "tenant is ambiguous" — the backend refusing to guess which
