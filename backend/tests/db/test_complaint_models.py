@@ -1,0 +1,185 @@
+import pytest
+from sqlalchemy.exc import IntegrityError
+
+from app.db.models.complaint import Complaint, ComplaintMedia
+from app.db.models.workflow import Escalation, Notification, WorkOrder
+
+
+def test_complaint_requires_a_tracking_id(db_session):
+    complaint = Complaint(
+        tracking_id="CIV-ABC12345",
+        citizen_email="a@b.com",
+        description="Pothole on the main road",
+    )
+    db_session.add(complaint)
+    db_session.commit()
+    assert complaint.status == "submitted"
+    assert complaint.reopen_count == 0
+
+
+def test_tracking_id_is_unique(db_session):
+    for _ in range(2):
+        db_session.add(Complaint(
+            tracking_id="CIV-DUPLICATE",
+            citizen_email="a@b.com",
+            description="x" * 20,
+        ))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+def test_complaint_carries_graph_metadata(db_session):
+    complaint = Complaint(
+        tracking_id="CIV-GRAPH001",
+        citizen_email="a@b.com",
+        description="Streetlight is out",
+        graph_thread_id="thread-abc",
+        pipeline_version="v2.0",
+        evidence=[{"source": "sop_roads.md", "score": 0.81}],
+    )
+    db_session.add(complaint)
+    db_session.commit()
+    db_session.expire_all()
+
+    reloaded = db_session.query(Complaint).one()
+    assert reloaded.graph_thread_id == "thread-abc"
+    assert reloaded.evidence[0]["source"] == "sop_roads.md"
+
+
+def test_media_links_back_to_its_complaint(db_session):
+    complaint = Complaint(
+        tracking_id="CIV-MEDIA001",
+        citizen_email="a@b.com",
+        description="Broken bench in the park",
+    )
+    db_session.add(complaint)
+    db_session.flush()
+    db_session.add(ComplaintMedia(
+        complaint_id=complaint.id,
+        file_path="uploads/x.jpg",
+        media_type="image",
+    ))
+    db_session.commit()
+    db_session.expire_all()
+
+    assert len(db_session.query(Complaint).one().media) == 1
+
+
+def test_work_order_flags_clusters_with_a_boolean(db_session):
+    """v1 detected clusters with a LIKE query against a free-text notes column."""
+    complaint = Complaint(
+        tracking_id="CIV-WO000001",
+        citizen_email="a@b.com",
+        description="Waterlogging near the junction",
+    )
+    db_session.add(complaint)
+    db_session.flush()
+
+    order = WorkOrder(complaint_id=complaint.id, is_cluster=True)
+    db_session.add(order)
+    db_session.commit()
+
+    assert order.status == "created"
+    assert order.is_cluster is True
+
+
+def test_a_complaint_cannot_have_two_work_orders(db_session):
+    """Complaint.work_order is uselist=False; the schema must enforce it."""
+    complaint = Complaint(
+        tracking_id="CIV-DUPWO001",
+        citizen_email="a@b.com",
+        description="Streetlight out on the corner",
+    )
+    db_session.add(complaint)
+    db_session.flush()
+
+    db_session.add(WorkOrder(complaint_id=complaint.id))
+    db_session.add(WorkOrder(complaint_id=complaint.id))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+def test_notification_dedupe_key_is_unique(db_session):
+    """v1 Bug 4: SLA warnings re-sent every 5 minutes with no idempotency key."""
+    for _ in range(2):
+        db_session.add(Notification(
+            recipient_email="a@b.com",
+            notification_type="sla_warning",
+            message="SLA approaching",
+            dedupe_key="complaint-1:sla_warning:50",
+        ))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+def test_escalation_records_the_jurisdiction_hop(db_session):
+    complaint = Complaint(
+        tracking_id="CIV-ESC00001",
+        citizen_email="a@b.com",
+        description="Open manhole outside the school",
+    )
+    db_session.add(complaint)
+    db_session.flush()
+
+    db_session.add(Escalation(
+        complaint_id=complaint.id,
+        from_level="ward",
+        to_level="block",
+        reason="SLA breached",
+    ))
+    db_session.commit()
+    assert db_session.query(Escalation).one().to_level == "block"
+
+
+def test_deleting_a_complaint_cascades_to_its_children(db_session):
+    """Children are nullable=False, so without a cascade the delete fails."""
+    complaint = Complaint(
+        tracking_id="CIV-CASCADE1",
+        citizen_email="a@b.com",
+        description="Broken drain cover on the lane",
+    )
+    db_session.add(complaint)
+    db_session.flush()
+    db_session.add(ComplaintMedia(
+        complaint_id=complaint.id, file_path="uploads/x.jpg", media_type="image"
+    ))
+    db_session.add(WorkOrder(complaint_id=complaint.id))
+    db_session.commit()
+
+    db_session.delete(complaint)
+    db_session.commit()
+
+    assert db_session.query(ComplaintMedia).count() == 0
+    assert db_session.query(WorkOrder).count() == 0
+
+
+def _clusterable(db_session, tracking_id, description):
+    complaint = Complaint(tracking_id=tracking_id, citizen_email="a@b.com", description=description,
+                          category="ROADS", latitude=12.9716, longitude=77.5946)
+    db_session.add(complaint)
+    db_session.flush()
+    return complaint
+
+
+def test_cluster_members_point_at_their_lead(db_session):
+    """Membership lives on the complaint, not on the work order:
+    work_orders.complaint_id is unique, so one grouped order cannot reference
+    every complaint in its cluster."""
+    lead = _clusterable(db_session, "CIV-LEAD0001", "huge pothole on MG Road")
+    member = _clusterable(db_session, "CIV-MEMB0001", "MG Road has caved in")
+    lead.cluster_id = lead.id
+    member.cluster_id = lead.id
+    db_session.add(WorkOrder(complaint_id=lead.id, is_cluster=True, cluster_size=2))
+    db_session.commit()
+
+    members = db_session.query(Complaint).filter_by(cluster_id=lead.id).all()
+    assert {c.id for c in members} == {lead.id, member.id}
+    order = db_session.query(WorkOrder).filter_by(is_cluster=True).one()
+    assert order.complaint_id == lead.id
+    assert order.cluster_size == 2
+
+
+def test_an_unclustered_complaint_has_no_cluster_id(db_session):
+    """The clustering job selects on `cluster_id IS NULL`, so the default
+    must be NULL and not the complaint's own id."""
+    assert _clusterable(db_session, "CIV-SOLO0001", "single pothole").cluster_id is None

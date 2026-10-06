@@ -1,9 +1,28 @@
 import { useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 
+/** The officer screens, which only appear once there is a token.
+ *
+ * Until this existed every officer screen was reachable only by typing its URL — the
+ * header carried citizen navigation and an "Admin" link to the dashboard, and nothing
+ * led to the queue, the work orders or the assistant. Found by rendering the chat
+ * screen and looking at it, which is the whole argument for doing that. */
+const OFFICER_LINKS = [
+  { to: '/admin', label: 'Overview' },
+  { to: '/admin/complaints', label: 'Queue' },
+  { to: '/admin/work-orders', label: 'Work orders' },
+  { to: '/admin/chat', label: 'Assistant' },
+  { to: '/admin/runs', label: 'Traces' },
+  { to: '/admin/corpus', label: 'Knowledge' },
+  { to: '/admin/evals', label: 'Evaluation' },
+];
+
 export default function Layout() {
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  // Read on every render rather than held in state: a sign-out elsewhere clears the
+  // token, and a stale `true` here would show officer links that all bounce to login.
+  const signedIn = Boolean(localStorage.getItem('admin_token'));
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F5F6FA]">
@@ -19,6 +38,19 @@ export default function Layout() {
 
           {/* Desktop nav */}
           <div className="hidden md:flex items-center gap-6">
+            {signedIn && OFFICER_LINKS.map((link) => (
+              <Link
+                key={link.to}
+                to={link.to}
+                className={
+                  location.pathname === link.to
+                    ? 'text-sm font-semibold text-blue-900 border-b-2 border-blue-900 pb-0.5'
+                    : 'text-sm font-medium text-gray-600 hover:text-gray-900'
+                }
+              >
+                {link.label}
+              </Link>
+            ))}
             <Link
               to="/track"
               className={`text-sm font-medium transition-colors ${
@@ -86,13 +118,24 @@ export default function Layout() {
             >
               Submit Complaint
             </Link>
-            <Link
-              to="/admin"
-              onClick={() => setMobileOpen(false)}
-              className="block px-4 py-2.5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg"
-            >
-              Admin
-            </Link>
+            {signedIn ? OFFICER_LINKS.map((link) => (
+              <Link
+                key={link.to}
+                to={link.to}
+                onClick={() => setMobileOpen(false)}
+                className="block px-4 py-2.5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg"
+              >
+                {link.label}
+              </Link>
+            )) : (
+              <Link
+                to="/admin"
+                onClick={() => setMobileOpen(false)}
+                className="block px-4 py-2.5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg"
+              >
+                Admin
+              </Link>
+            )}
           </div>
         )}
       </nav>

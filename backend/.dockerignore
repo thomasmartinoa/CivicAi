@@ -1,0 +1,25 @@
+# The host virtualenv is 319 MB of Linux-specific wheels built against the host's
+# Python. Shipping it into the image is slow, bloats the layer, and — because the
+# Dockerfile does `COPY . .` after `pip install` — would drop a second, foreign
+# site-packages into /app. Found by watching the build context climb past 95 MB.
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Local state. The database and the FAISS index live in the /data volume at run time,
+# and copying a development copy in would ship one developer's complaints.
+*.db
+*.db-shm
+*.db-wal
+data/
+uploads/
+.env
+
+# Test and tooling artefacts
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage

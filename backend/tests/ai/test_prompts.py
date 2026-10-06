@@ -1,0 +1,258 @@
+import pytest
+from langchain_core.prompts import ChatPromptTemplate
+
+from app.ai.prompts import LATEST, PROMPT_REGISTRY, get_prompt
+
+
+def test_every_expected_prompt_is_registered():
+    assert set(LATEST) == {"validate", "classify", "investigate", "assess_risk",
+                           "vision", "work_order", "work_order_cluster", "briefing",
+                           "email_draft", "judge", "officer_chat"}
+
+
+def test_get_prompt_returns_the_latest_version_by_default():
+    assert isinstance(get_prompt("classify"), ChatPromptTemplate)
+
+
+def test_get_prompt_can_pin_an_explicit_version():
+    """Versioning is what lets the Phase 3 eval harness A/B two prompts."""
+    assert get_prompt("classify", "v1") is PROMPT_REGISTRY[("classify", "v1")]
+
+
+def test_unknown_prompt_name_raises_with_a_useful_message():
+    with pytest.raises(KeyError, match="nonexistent"):
+        get_prompt("nonexistent")
+
+
+def test_unknown_version_raises_with_a_useful_message():
+    with pytest.raises(KeyError, match="v99"):
+        get_prompt("classify", "v99")
+
+
+def test_empty_version_raises_instead_of_silently_defaulting():
+    """`version or LATEST[name]` would treat "" as falsy and default silently.
+    An explicit empty string is a caller mistake and must raise."""
+    with pytest.raises(KeyError):
+        get_prompt("classify", "")
+
+
+def test_every_latest_version_is_actually_registered():
+    """LATEST and PROMPT_REGISTRY are independent literals; nothing else ties them."""
+    for name, version in LATEST.items():
+        assert (name, version) in PROMPT_REGISTRY, f"LATEST[{name!r}]={version!r} is not registered"
+
+
+def test_classify_prompt_declares_the_variables_its_node_supplies():
+    assert set(get_prompt("classify").input_variables) == {"description", "media_context"}
+
+
+def test_validate_prompt_declares_its_variables():
+    assert set(get_prompt("validate").input_variables) == {"description"}
+
+
+def test_assess_risk_prompt_declares_its_variables():
+    assert set(get_prompt("assess_risk").input_variables) == {
+        "description", "category", "media_context", "evidence"
+    }
+
+
+def test_classify_prompt_renders_with_untrusted_text_without_breaking():
+    """Citizen text is untrusted input. Braces in it must not blow up templating."""
+    rendered = get_prompt("classify").format_messages(
+        description="pothole near {curly} braces and a $dollar",
+        media_context="",
+    )
+    assert any("curly" in m.content for m in rendered)
+
+
+def test_every_registered_prompt_renders_from_its_declared_variables():
+    """A string fills an ordinary variable, but a MessagesPlaceholder wants a list of
+    messages — officer_chat has one, and filling it with "x" raises rather than
+    rendering. The filler has to match what each variable actually accepts, or this
+    test only covers the templates that happen to be simple."""
+    from langchain_core.messages import HumanMessage
+    from langchain_core.prompts import MessagesPlaceholder
+
+    for (name, version), template in PROMPT_REGISTRY.items():
+        placeholders = {m.variable_name for m in template.messages
+                        if isinstance(m, MessagesPlaceholder)}
+        filler = {
+            var: [HumanMessage("x")] if var in placeholders else "x"
+            for var in template.input_variables
+        }
+        messages = template.format_messages(**filler)
+        assert messages, f"{name}/{version} rendered nothing"
+
+
+def test_vision_prompt_carries_an_image_block_not_a_plain_string():
+    """A plain-string human turn cannot carry image data to Gemini; the human
+    turn must render as a list of content blocks including an image block."""
+    tiny_png_data_url = (
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0l"
+        "EQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    rendered = get_prompt("vision").format_messages(
+        image_url=tiny_png_data_url,
+        image_context="Additional context: reported near a school.",
+    )
+    human_messages = [m for m in rendered if m.type == "human"]
+    assert human_messages, "expected a human message"
+    content = human_messages[0].content
+    assert isinstance(content, list), "human turn must be a list of content blocks, not a plain string"
+    image_blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "image_url"]
+    assert image_blocks, f"expected an image_url block, got: {content}"
+    assert image_blocks[0]["image_url"]["url"] == tiny_png_data_url
+
+
+def test_the_work_order_prompt_receives_evidence_and_cites_it():
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("work_order")
+    assert set(prompt.input_variables) == {"category", "risk_level", "description", "evidence"}
+    rendered = prompt.format(category="ROADS", risk_level="high", description="x", evidence="[1] rate_card.md\n₹450")
+    assert "[1] rate_card.md" in rendered
+    assert "<report>" in rendered
+    assert "only" in rendered.lower() and "rate card" in rendered.lower()
+
+
+def test_assess_risk_v2_takes_evidence_and_is_the_default():
+    from app.ai.prompts import LATEST, get_prompt
+
+    assert LATEST["assess_risk"] == "v2"
+    v2 = get_prompt("assess_risk")
+    assert set(v2.input_variables) == {"category", "description", "media_context", "evidence"}
+    v1 = get_prompt("assess_risk", "v1")
+    assert "evidence" not in v1.input_variables, "v1 stays as the ungrounded baseline for the evals"
+
+
+def test_the_investigate_prompt_sees_the_first_pass_and_the_evidence():
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("investigate")
+    assert set(prompt.input_variables) == {
+        "description", "media_context", "previous_category", "previous_confidence", "evidence"
+    }
+    rendered = prompt.format(description="a trench", media_context="", previous_category="ROADS",
+                             previous_confidence=0.4, evidence="[1] category_taxonomy.md\nCONSTRUCTION owns excavation")
+    assert "[1] category_taxonomy.md" in rendered
+    assert "<evidence>" in rendered and "<report>" in rendered
+
+
+def test_the_cluster_cost_prompt_forbids_inventing_the_discount():
+    """The bulk rule lives in rate_card.md. A prompt that let the model supply
+    it would be v1's hardcoded 0.7 with extra steps."""
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("work_order_cluster")
+    assert set(prompt.input_variables) == {"category", "risk_level", "site_count",
+                                           "descriptions", "evidence"}
+    rendered = prompt.format(category="ROADS", risk_level="high", site_count=3,
+                             descriptions="- a\n- b\n- c",
+                             evidence="[1] rate_card.md › Grouped work at multiple sites\n70%")
+    assert "[1] rate_card.md" in rendered
+    assert "never invent" in rendered.lower()
+    assert "<report>" in rendered and "<evidence>" in rendered
+
+
+def test_the_briefing_prompt_is_told_not_to_recompute_the_numbers():
+    """The counts are queried in Python; a model that re-derives them is the
+    fastest way to a briefing an officer stops trusting."""
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("briefing")
+    assert set(prompt.input_variables) == {"date", "stats_table", "at_risk_list",
+                                           "cluster_list", "evidence"}
+    rendered = prompt.format(date="2026-09-27", stats_table="new: 4", at_risk_list="none",
+                             cluster_list="none", evidence="[1] sla_policy.md › Response windows")
+    assert "do not recompute" in rendered.lower()
+    assert "[1] sla_policy.md" in rendered
+
+
+def test_the_email_draft_prompt_refuses_to_invent_specifics():
+    """An officer signs this. Invented reference numbers or statutes are worse
+    than a blunt email."""
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("email_draft")
+    assert set(prompt.input_variables) == {"department", "tracking_id", "category",
+                                           "risk_level", "sla_hours", "description", "evidence"}
+    rendered = prompt.format(department="Public Works Department", tracking_id="CIV-1",
+                             category="ROADS", risk_level="high", sla_hours=24,
+                             description="pothole", evidence="[1] sop_roads.md › Ownership")
+    assert "do not invent" in rendered.lower()
+    assert "<report>" in rendered and "<evidence>" in rendered
+
+
+def test_the_judge_prompt_scores_one_criterion_with_its_anchors():
+    from app.ai.prompts import get_prompt
+
+    prompt = get_prompt("judge")
+    assert set(prompt.input_variables) == {"criterion", "criterion_description",
+                                           "anchors", "artifact", "evidence"}
+    rendered = prompt.format(criterion="grounded", criterion_description="claims are cited",
+                             anchors="1: uncited\n5: fully cited", artifact="Public Works owns this",
+                             evidence="[1] sop_roads.md")
+    assert "score only this criterion" in rendered.lower()
+    assert "<artifact>" in rendered and "<evidence>" in rendered
+
+
+def test_validate_v2_tells_the_model_the_scope_v1_left_it_to_guess():
+    """The 2026-10-04 sweep measured invalid-complaint precision at 0.40: validate
+    rejected 18 of 88 real complaints, among them twenty gas cylinders in a
+    residential building and a child's dog bite. The cause was scope, not strictness
+    — v1 said "be strict about subject matter" and never named the twelve categories
+    the classifier handles, so the model applied its own narrower idea of
+    "infrastructure". v2 names them."""
+    from app.ai.prompts import get_prompt
+    from app.constants import Category
+
+    v1 = get_prompt("validate", "v1").format(description="x")
+    v2 = get_prompt("validate", "v2").format(description="x")
+
+    for category in Category:
+        assert category.value in v2, f"{category.value} missing from validate v2"
+        if category.value in ("FIRE_HAZARD", "STRAY_ANIMALS", "HEALTH"):
+            assert category.value not in v1, "v1 is the ungrounded baseline; leave it"
+
+    assert "vagueness is not grounds for rejection" in v2.lower()
+    assert "more costly" in v2, "the asymmetry has to be stated, not implied"
+    assert "<report>" in v2, "the injection fence stays"
+
+
+def test_both_validate_versions_stay_registered():
+    """v1 is the before-number for the fix; deleting it would make the comparison
+    unrepeatable."""
+    from app.ai.prompts import PROMPT_REGISTRY
+
+    assert ("validate", "v1") in PROMPT_REGISTRY
+    assert ("validate", "v2") in PROMPT_REGISTRY
+
+
+def test_validate_is_on_v2_and_v1_is_still_registered():
+    """v2 was promoted on 2026-10-06 after an A/B that was explicitly a trade: over
+    n=40, v1 wrongly rejected 9 real complaints and admitted no junk, v2 rejects 3
+    and admits 1. The judgement was that a terminal rejection with no appeal path
+    costs a citizen far more than a junk row costs an officer.
+
+    v1 stays registered because it is the other arm of that comparison; deleting it
+    would make the decision unrepeatable.
+    """
+    from app.ai.prompts import LATEST, PROMPT_REGISTRY
+
+    assert LATEST["validate"] == "v2"
+    assert ("validate", "v1") in PROMPT_REGISTRY
+    assert ("validate", "v2") in PROMPT_REGISTRY
+
+
+def test_the_core_baseline_records_which_validator_it_was_measured_under():
+    """Changing the validator changes the population reaching classify, so a
+    macro-F1 compared across that change is comparing two different things. The
+    baseline has to say which validator produced it or the gate lies quietly."""
+    import json
+    from pathlib import Path
+
+    baseline = json.loads(
+        (Path(__file__).resolve().parents[1] / ".." / "app" / "evals" / "baselines"
+         / "core.json").read_text()
+    )
+    assert "validate_version" in baseline

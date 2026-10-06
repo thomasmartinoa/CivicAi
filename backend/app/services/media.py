@@ -1,62 +1,59 @@
-import os
-import uuid
-from pathlib import Path
-from typing import Optional
+"""Upload storage.
 
-import aiofiles
-from fastapi import UploadFile
+Files are stored under a generated name. A client-supplied filename is kept only
+as a display label and never becomes a path component — the vision adapter in
+`app/ai/graph/runner.py` also contains against traversal, but defence there must
+not be the only defence.
+"""
+
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
 
 from app.config import settings
 
-# Always store relative to this file's location (backend/uploads/) regardless of CWD
-_BASE_DIR = Path(__file__).resolve().parent.parent.parent  # → backend/
-_DEFAULT_UPLOAD = _BASE_DIR / "uploads"
+UPLOAD_ROOT = settings.upload_path
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+
+# Extension -> media_type. An extension absent from this map is rejected before
+# anything is written to disk.
+ALLOWED_MEDIA: dict[str, str] = {
+    "jpg": "image", "jpeg": "image", "png": "image", "webp": "image",
+    "mp3": "voice", "wav": "voice", "m4a": "voice", "ogg": "voice",
+}
 
 
-class MediaService:
-    def __init__(self):
-        self.upload_dir = Path(settings.upload_dir)
-        # If the configured path is relative, anchor it to the backend dir
-        if not self.upload_dir.is_absolute():
-            self.upload_dir = _BASE_DIR / self.upload_dir
-        self.upload_dir.mkdir(parents=True, exist_ok=True)
-
-    async def save_file(self, file: UploadFile, complaint_id: str) -> dict:
-        ext = Path(file.filename).suffix if file.filename else ""
-        filename = f"{complaint_id}_{uuid.uuid4().hex[:8]}{ext}"
-        file_path = self.upload_dir / filename
-
-        async with aiofiles.open(file_path, "wb") as f:
-            content = await file.read()
-            await f.write(content)
-
-        media_type = self._detect_media_type(ext)
-        # Use forward slashes for URL compatibility
-        relative_path = f"uploads/{filename}"
-        return {
-            "file_path": relative_path,
-            "media_type": media_type,
-            "original_filename": file.filename,
-        }
-
-    async def speech_to_text(self, file_path: str) -> str:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
-        with open(file_path, "rb") as audio_file:
-            transcript = await client.audio.transcriptions.create(
-                model="whisper-1", file=audio_file,
-            )
-        return transcript.text
-
-    def _detect_media_type(self, ext: str) -> str:
-        ext = ext.lower()
-        if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
-            return "image"
-        elif ext in (".mp4", ".avi", ".mov", ".webm"):
-            return "video"
-        elif ext in (".mp3", ".wav", ".ogg", ".m4a"):
-            return "voice"
-        return "unknown"
+class MediaTooLarge(ValueError):
+    pass
 
 
-media_service = MediaService()
+class MediaTypeNotAllowed(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class StoredMedia:
+    file_path: str
+    media_type: str
+    original_filename: str
+
+
+def store_upload(data: bytes, original_filename: str) -> StoredMedia:
+    """Validate, then write under a generated name. Rejects before writing."""
+    extension = Path(original_filename).suffix.lstrip(".").lower()
+    if extension not in ALLOWED_MEDIA:
+        raise MediaTypeNotAllowed(
+            f"{extension or original_filename!r} is not an accepted upload type; "
+            f"accepted: {sorted(set(ALLOWED_MEDIA))}"
+        )
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise MediaTooLarge(f"{len(data)} bytes exceeds the {MAX_UPLOAD_BYTES} byte limit")
+
+    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    name = f"{uuid.uuid4().hex}.{extension}"
+    (UPLOAD_ROOT / name).write_bytes(data)
+    return StoredMedia(
+        file_path=f"uploads/{name}",
+        media_type=ALLOWED_MEDIA[extension],
+        original_filename=original_filename,
+    )

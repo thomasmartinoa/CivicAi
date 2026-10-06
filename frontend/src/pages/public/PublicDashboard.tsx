@@ -35,7 +35,28 @@ const createCustomIcon = (color: string) => {
 };
 
 const PIE_COLORS = ['#1e3a5f', '#2563eb', '#16a34a', '#eab308', '#ef4444', '#8b5cf6', '#6b7280'];
-const CATEGORIES = ["Roads", "Electricity", "Water", "Sanitation", "Public Spaces", "Education", "Health", "Flooding", "Fire Hazard", "Construction", "Stray Animals", "Sewage"];
+// The wire value comes from the backend's Category enum; the label is for people.
+// The previous version held display names and uppercased them at call time, which
+// turned "Public Spaces" into "PUBLIC SPACES" where the API wants "PUBLIC_SPACES" —
+// so PUBLIC_SPACES, FIRE_HAZARD and STRAY_ANIMALS silently matched nothing.
+const CATEGORIES: { value: string; label: string }[] = [
+  { value: 'ROADS', label: 'Roads' },
+  { value: 'ELECTRICITY', label: 'Electricity' },
+  { value: 'WATER', label: 'Water' },
+  { value: 'SANITATION', label: 'Sanitation' },
+  { value: 'PUBLIC_SPACES', label: 'Public Spaces' },
+  { value: 'EDUCATION', label: 'Education' },
+  { value: 'HEALTH', label: 'Health' },
+  { value: 'FLOODING', label: 'Flooding' },
+  { value: 'FIRE_HAZARD', label: 'Fire Hazard' },
+  { value: 'CONSTRUCTION', label: 'Construction' },
+  { value: 'STRAY_ANIMALS', label: 'Stray Animals' },
+  { value: 'SEWAGE', label: 'Sewage' },
+];
+
+const CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
+  CATEGORIES.map(c => [c.value, c.label])
+);
 
 // Map updater component
 function MapUpdater({ markers, state, district }: { markers: any[], state: string, district: string }) {
@@ -55,6 +76,8 @@ function MapUpdater({ markers, state, district }: { markers: any[], state: strin
   return null;
 }
 
+// Still used on the recent-complaints cards, where risk_level IS published. It is
+// no longer used on the map: a heatmap point is a grid cell and carries no risk.
 const RISK_COLOR: Record<string, string> = {
   critical: '#ef4444',
   high: '#f97316',
@@ -62,9 +85,15 @@ const RISK_COLOR: Record<string, string> = {
   low: '#22c55e',
 };
 
-function getRiskColor(riskLevel: string | null | undefined, status: string) {
-  if (status === 'resolved' || status === 'closed') return '#22c55e';
-  return RISK_COLOR[riskLevel || 'medium'] || '#eab308';
+/** A heatmap point is a coarsened grid cell, not a complaint: the public API sends
+ *  lat/lng/weight/category and deliberately no status or risk level, because those
+ *  belong to individual reports. Colouring by category is therefore the most the
+ *  map can honestly say, and the marker grows with how many complaints fell in the
+ *  cell. */
+function getCategoryColor(category: string | null): string {
+  if (!category) return '#6b7280';
+  const index = CATEGORIES.findIndex(c => c.value === category);
+  return index === -1 ? '#6b7280' : PIE_COLORS[index % PIE_COLORS.length];
 }
 
 
@@ -81,7 +110,7 @@ export default function PublicDashboard() {
   const { data, isLoading, isError } = useQuery<DashboardStats>({
     queryKey: ['publicDashboard', selectedState, selectedDistrict, selectedCategory],
     queryFn: async () => {
-      const res = await getPublicDashboard(undefined, selectedState || undefined, selectedDistrict || undefined, selectedCategory ? selectedCategory.toUpperCase() : undefined);
+      const res = await getPublicDashboard(undefined, selectedState || undefined, selectedDistrict || undefined, selectedCategory || undefined);
       return res.data;
     },
     placeholderData: (prev) => prev,
@@ -143,6 +172,20 @@ export default function PublicDashboard() {
             ))}
           </select>
         </div>
+
+        <div className="flex-1">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+          <select
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
+          >
+            <option value="">All Categories</option>
+            {CATEGORIES.map(category => (
+              <option key={category.value} value={category.value}>{category.label}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Stats row & Status Distribution */}
@@ -189,7 +232,7 @@ export default function PublicDashboard() {
           <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm flex-1 flex flex-col justify-center">
             <p className="text-sm text-gray-500 mb-1">Resolution Rate</p>
             <p className="text-4xl font-bold text-purple-600">
-              {(data?.resolution_rate || 0).toFixed(1)}%
+              {data?.resolution_rate == null ? 'No data' : `${(data.resolution_rate * 100).toFixed(1)}%`}
             </p>
           </div>
         </div>
@@ -223,12 +266,14 @@ export default function PublicDashboard() {
               <Marker
                 key={i}
                 position={[marker.lat, marker.lng]}
-                icon={createCustomIcon(getRiskColor(marker.risk_level, marker.status))}
+                icon={createCustomIcon(getCategoryColor(marker.category))}
               >
                 <Popup>
                   <div className="text-sm font-semibold mb-1">{marker.category || 'Unknown'}</div>
-                  <div className="text-xs text-gray-600 capitalize">Status: {marker.status}</div>
-                  {marker.risk_level && <div className="text-xs text-gray-500 capitalize">Risk: {marker.risk_level}</div>}
+                  <div className="text-xs text-gray-600">
+                    {marker.weight === 1 ? '1 complaint' : `${marker.weight} complaints`} in this area
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">Location shown to the nearest ~100 m</div>
                 </Popup>
               </Marker>
             ))}
@@ -241,7 +286,7 @@ export default function PublicDashboard() {
       {/* Complaints List */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm mt-8">
         <h2 className="text-xl font-semibold text-gray-800 mb-6">
-          Latest Issues {selectedCategory ? `in ${selectedCategory}` : ''}
+          Latest Issues {selectedCategory ? `in ${CATEGORY_LABELS[selectedCategory] ?? selectedCategory}` : ''}
         </h2>
         {data?.recent_complaints && data.recent_complaints.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -262,9 +307,18 @@ export default function PublicDashboard() {
                       {c.status}
                     </span>
                   </div>
-                  <p className="text-sm text-gray-800 font-medium mb-3 line-clamp-2">{c.description}</p>
+                  {c.risk_level && (
+                    <p className="text-sm font-medium mb-3 capitalize"
+                       style={{ color: RISK_COLOR[c.risk_level] ?? '#374151' }}>
+                      {c.risk_level} risk
+                    </p>
+                  )}
                   <div className="text-xs text-gray-500 space-y-1">
-                    <p className="flex items-start gap-1">📍 <span>{c.address || 'Location not specified'}</span></p>
+                    {/* District and state, never the street: the public API withholds
+                        the address, because a place plus a date is often a household. */}
+                    <p className="flex items-start gap-1">📍 <span>
+                      {[c.district, c.state].filter(Boolean).join(', ') || 'Location not specified'}
+                    </span></p>
                     <p className="flex items-center gap-1">📅 <span>{new Date(c.created_at).toLocaleDateString()}</span></p>
                   </div>
                 </div>

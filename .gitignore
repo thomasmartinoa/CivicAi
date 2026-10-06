@@ -11,3 +11,10 @@ uploads/
 node_modules/
 .DS_Store
 *.db
+# SQLite write-ahead sidecars. *.db does not match these, so they were tracked
+# until 2026-10-06 — they are transient and change on every connection.
+*.db-shm
+*.db-wal
+
+# The FAISS index (chunks.json, index.faiss, manifest.json per collection)
+backend/data/

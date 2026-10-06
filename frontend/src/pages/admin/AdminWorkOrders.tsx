@@ -30,7 +30,7 @@ export default function AdminWorkOrders() {
     queryKey: ['adminWorkOrders', filterStatus],
     queryFn: async () => {
       const res = await getWorkOrders(filterStatus || undefined);
-      return res.data.work_orders;
+      return res.data.items;  // the endpoint returns a page, not an array
     },
   });
 
@@ -141,7 +141,7 @@ export default function AdminWorkOrders() {
                 (data || []).map((wo) => (
                   <tr key={wo.id} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="px-4 py-3 font-mono text-xs">{wo.complaint_id.slice(0, 8)}...</td>
-                    <td className="px-4 py-3">{wo.contractor_id ? wo.contractor_id.slice(0, 8) + '...' : 'Unassigned'}</td>
+                    <td className="px-4 py-3">{wo.contractor_name ?? 'Unassigned'}</td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor[wo.status] || 'bg-gray-100'}`}>
                         {wo.status}
@@ -204,10 +204,11 @@ export default function AdminWorkOrders() {
                           disabled={statusMutation.isPending}
                           className="border border-gray-300 rounded px-2 py-1 text-xs bg-white disabled:opacity-60"
                         >
+                          {/* The photo requirement is lifted until the upload
+                              endpoint exists: gating on a field nothing can set
+                              would mean no order could ever be completed. */}
                           {STATUS_OPTIONS.map((s) => (
-                            <option key={s} value={s} disabled={s === 'completed' && !wo.completion_photo}>
-                              {s === 'completed' && !wo.completion_photo ? '🔒 completed (need photo)' : s}
-                            </option>
+                            <option key={s} value={s}>{s}</option>
                           ))}
                         </select>
                       </div>

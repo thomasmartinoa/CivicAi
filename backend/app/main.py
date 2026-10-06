@@ -1,111 +1,104 @@
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import os
 
-# Absolute path to this file's parent (app/) then parent (backend/)
-BASE_DIR = Path(__file__).resolve().parent.parent
-UPLOADS_DIR = BASE_DIR / "uploads"
-UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-
+from app.api import admin, chat, complaints, public, system
 from app.config import settings
-from app.database import get_db, SessionLocal, create_tables
-from app.routers import auth, complaints, admin, public
-from app.agents.tracker import check_sla_deadlines
-from app.agents.cluster import run_cluster_detection as _cluster_detect
-from app.agents.briefing import generate_daily_briefing
-from app.models import *  # noqa: F401,F403 - ensure all models are loaded
-from app.models.daily_briefing import DailyBriefing  # noqa: F401 - register model
-from app.utils.auth import require_officer_or_admin
-
-scheduler = AsyncIOScheduler()
+from app.db.session import SessionLocal
 
 
-async def run_sla_check():
-    db = SessionLocal()
-    try:
-        await check_sla_deadlines(db)
-    finally:
-        db.close()
+def _guard_against_placeholder_secret_in_production() -> None:
+    """Refuse to boot with the placeholder SECRET_KEY in production.
 
-
-async def run_cluster_detection():
-    db = SessionLocal()
-    try:
-        await _cluster_detect(db)
-    finally:
-        db.close()
-
-
-async def run_daily_briefing():
-    db = SessionLocal()
-    try:
-        await generate_daily_briefing(db)
-    finally:
-        db.close()
+    SECRET_KEY signs real JWTs once auth lands. `environment` defaults to
+    "production" (fail closed) and `secret_key` defaults to a public,
+    well-known placeholder, so this is intentionally NOT a pydantic
+    validator on Settings: that field defaults to the exact combination
+    this guards against, and Settings() is built once, eagerly, at import
+    time — a validator there would make the module itself unimportable
+    for any process (including the test suite) that has not configured a
+    real secret. Checking at startup instead means the app still imports
+    everywhere, but a real deployment that boots unconfigured fails loudly.
+    """
+    if settings.environment == "production" and settings.secret_key == "change-me-in-production":
+        raise RuntimeError("SECRET_KEY must be set when ENVIRONMENT=production")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables (for SQLite dev mode)
-    create_tables()
-    scheduler.add_job(run_sla_check, "interval", minutes=5)
-    scheduler.add_job(run_cluster_detection, "interval", hours=1)
-    scheduler.add_job(run_daily_briefing, "cron", hour=8, minute=0)
-    scheduler.start()
+    import logging
+
+    logger = logging.getLogger(__name__)
+    _guard_against_placeholder_secret_in_production()
+
+    from app.services.execution import resume_incomplete_runs, schedule_complaint_run
+
+    # Check if a provider is configured
+    if settings.gemini_api_key is None and not settings.ollama_enabled:
+        logger.warning("no LLM provider configured; AI pipeline will not function")
+
+    from app.ai.rag.ingest import COLLECTION, collection_index_dir
+    if not (collection_index_dir(settings.rag_index_path, COLLECTION) / "manifest.json").exists():
+        logger.warning(
+            "no policy index at %s; nodes will run without citations until "
+            "`python -m app.ai.rag.ingest` has been run",
+            collection_index_dir(settings.rag_index_path, COLLECTION),
+        )
+
+    try:
+        for complaint_id in resume_incomplete_runs(session_factory=SessionLocal):
+            logger.info("resuming interrupted complaint %s", complaint_id)
+            schedule_complaint_run(complaint_id)
+    except Exception:
+        logger.exception("startup resume sweep failed; continuing anyway")
+
+    scheduler = None
+    if settings.background_jobs_enabled:
+        from app.services.scheduler import build_scheduler
+
+        scheduler = build_scheduler(SessionLocal)
+        scheduler.start()
+        logger.info("background jobs started")
+
     yield
-    scheduler.shutdown()
+
+    if scheduler is not None:
+        # wait=False: shutdown runs while the event loop is closing, and a
+        # tick in flight must not hold it open.
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(
     title="CivicAI",
-    description="AI-Driven Government Infrastructure Resolution System",
-    version="0.1.0",
+    description="AI-driven government infrastructure complaint resolution",
+    version=system.VERSION,
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    # 5173 is `npm run dev`; 4173 is `npm run preview`, which serves the production
+    # build and is what the Phase 5 screenshots are taken against. An origin missing
+    # here fails as a blocked preflight in the browser and as nothing at all in the
+    # server log, which is a slow thing to diagnose.
+    allow_origins=[
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:4173", "http://127.0.0.1:4173",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(auth.router)
+app.include_router(system.router)
 app.include_router(complaints.router)
 app.include_router(admin.router)
 app.include_router(public.router)
+app.include_router(chat.router)
 
-# Serve uploaded media files
-os.makedirs(str(UPLOADS_DIR), exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-
-@app.get("/media/{filename}")
-async def serve_media(filename: str):
-    from fastapi.responses import FileResponse
-    from fastapi import HTTPException
-    import mimetypes
-    file_path = UPLOADS_DIR / filename
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    mime, _ = mimetypes.guess_type(str(file_path))
-    return FileResponse(str(file_path), media_type=mime or "application/octet-stream")
-
-
-@app.post("/admin/seed")
-async def seed_data(db: Session = Depends(get_db)):
-    from app.mock_data.seed import seed_database
-    return seed_database(db)
+settings.upload_path.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(settings.upload_path)), name="uploads")

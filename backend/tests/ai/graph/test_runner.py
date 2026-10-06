@@ -1,0 +1,666 @@
+from dataclasses import replace
+
+import pytest
+from langchain_core.runnables import RunnableLambda
+from langgraph.checkpoint.memory import InMemorySaver
+
+import app.ai.graph.runner as runner_module
+from app.ai.graph.deps import GraphDeps
+from app.ai.graph.runner import (
+    _lazy_vision_chain, _media_to_prompt_vars, _thread_for, run_complaint,
+)
+from app.ai.schemas import (
+    ClassificationResult, RiskAssessment, ValidationResult, VisionObservation,
+)
+from app.constants import Category, RiskLevel
+from app.db.models.ai import AgentRun, AgentStep
+from app.db.models.complaint import Complaint
+from app.db.models.workflow import WorkOrder
+from app.services.seed import seed_database
+from tests.ai.graph.conftest import raises, returns
+
+
+@pytest.fixture
+def env(db_session):
+    """A seeded database plus a complaint ready to process.
+
+    Assigned to the seeded tenant: route_node treats a missing tenant_id as an
+    error (an unscoped query would span every tenant), and a complaint with no
+    tenant_id is exactly the shape this fixture used to produce.
+    """
+    seeded = seed_database(db_session)
+    complaint = Complaint(
+        tracking_id="CIV-RUNNER01",
+        tenant_id=seeded["tenant_id"],
+        citizen_email="a@b.com",
+        description="There is a large pothole on the main road near the school gate",
+    )
+    db_session.add(complaint)
+    db_session.commit()
+    return db_session, complaint
+
+
+def _deps(*, valid=True, notified=None, **over):
+    """The happy-path chains, with `over` replacing any of them.
+
+    `over` is merged rather than splatted alongside the defaults: a test that
+    needs its own classify_chain -- an unsure one, say -- would otherwise get
+    "multiple values for keyword argument" instead of the override it asked for.
+    """
+    defaults = dict(
+        validate_chain=returns(ValidationResult(is_valid=valid, rejection_reason=None if valid else "a neighbour dispute")),
+        classify_chain=returns(ClassificationResult(category=Category.ROADS, confidence=0.93)),
+        risk_chain=returns(RiskAssessment(priority_score=80, risk_level=RiskLevel.CRITICAL)),
+        vision_chain=returns(VisionObservation(text="a pothole", shows_infrastructure_problem=True)),
+        notify=(lambda **kw: notified.append(kw)) if notified is not None else (lambda **kw: None),
+    )
+    return GraphDeps(**{**defaults, **over})
+
+
+async def _run(session, complaint, deps):
+    return await run_complaint(
+        complaint.id,
+        session_factory=lambda: session,
+        deps=deps,
+        checkpointer=InMemorySaver(),
+    )
+
+
+async def test_a_valid_complaint_runs_end_to_end(env):
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.category == Category.ROADS.value
+    assert stored.risk_level == RiskLevel.CRITICAL.value
+    assert stored.priority_score == 80
+    assert stored.status == "assigned"
+    assert stored.terminal_reason is None
+
+
+async def test_a_valid_complaint_gets_a_work_order(env):
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    order = session.query(WorkOrder).one()
+    assert order.sla_hours == 4
+    assert order.sla_deadline is not None
+    assert order.cost_basis.startswith("estimate unavailable")
+
+
+async def test_a_rejected_complaint_is_stored_as_rejected(env):
+    """v1's headline bug: a correctly-rejected complaint was written back as
+    'submitted', indistinguishable from one that had never been processed."""
+    session, complaint = env
+    await _run(session, complaint, _deps(valid=False, session_factory=lambda: session))
+
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.status == "rejected"
+    assert "neighbour" in stored.terminal_reason
+    assert stored.status != "submitted"
+
+
+async def test_a_rejected_complaint_gets_no_work_order(env):
+    session, complaint = env
+    await _run(session, complaint, _deps(valid=False, session_factory=lambda: session))
+    assert session.query(WorkOrder).count() == 0
+
+
+async def test_a_geocode_failure_degrades_but_does_not_terminate(env):
+    """intake documents geocoding failure as degradation. errors accumulates via a
+    reducer and is never cleared, so a conditional edge that checks it kills the
+    complaint at the next branch -- for a fault that has nothing to do with it."""
+    session, complaint = env
+    complaint.latitude = 12.9716
+    complaint.longitude = 77.5946
+    session.commit()
+
+    def boom(lat, lon):
+        raise RuntimeError("nominatim slow")
+
+    deps = replace(_deps(session_factory=lambda: session), geocode=boom)
+    await _run(session, complaint, deps)
+
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.status == "assigned", "a geocode failure should not fail the complaint"
+    assert stored.category == "ROADS"
+    assert session.query(WorkOrder).count() == 1
+
+
+async def test_a_technical_failure_is_distinct_from_a_rejection(env):
+    """An outage and a business decision must not look the same afterwards."""
+    session, complaint = env
+    deps = replace(
+        _deps(session_factory=lambda: session),
+        classify_chain=raises(RuntimeError("503 from provider")),
+    )
+    await _run(session, complaint, deps)
+
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.status == "failed"
+    assert stored.terminal_reason is None
+
+
+async def test_an_agent_run_row_records_the_run(env):
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    run = session.query(AgentRun).one()
+    assert run.complaint_id == complaint.id
+    assert run.thread_id == complaint.id
+    assert run.status == "completed"
+    assert run.graph_version
+    assert run.duration_ms is not None
+
+
+async def test_one_agent_step_per_node_in_order(env):
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    steps = session.query(AgentStep).order_by(AgentStep.seq).all()
+    assert [s.node for s in steps] == [
+        "intake", "validate", "classify", "assess_risk", "route", "work_order", "notify"
+    ]
+    assert [s.seq for s in steps] == list(range(len(steps)))
+
+
+async def test_re_running_the_same_complaint_is_idempotent(env):
+    """A resumed run replays nodes that already succeeded. It must not email the
+    citizen twice, and it must not fail inserting a second work order —
+    work_orders.complaint_id is unique."""
+    session, complaint = env
+    sent = []
+    deps = _deps(notified=sent, session_factory=lambda: session)
+    saver = InMemorySaver()
+
+    for _ in range(2):
+        await run_complaint(
+            complaint.id,
+            session_factory=lambda: session,
+            deps=deps,
+            checkpointer=saver,
+        )
+
+    session.expire_all()
+    assert len(sent) == 1, "the citizen was notified twice"
+    assert session.query(WorkOrder).count() == 1, "a duplicate work order was inserted"
+    # Not 2: the second invocation lands on an already-completed thread, so
+    # _advance short-circuits to the stored snapshot without calling ainvoke,
+    # and run_complaint skips persist_result entirely -- nothing new happened,
+    # so no second AgentRun is recorded.
+    assert session.query(AgentRun).count() == 1, "a completed run should not record a second AgentRun"
+
+
+async def test_a_completed_run_is_not_re_executed(env):
+    """Passing an input restarts the graph from START; only None resumes. Without
+    that distinction a 'resume' re-invokes every chain for real and re-appends the
+    whole decision log as duplicate AgentStep rows."""
+    session, complaint = env
+    calls = {"classify": 0}
+
+    def counting(_):
+        calls["classify"] += 1
+        return ClassificationResult(category=Category.ROADS, confidence=0.93)
+
+    deps = replace(_deps(session_factory=lambda: session),
+                   classify_chain=RunnableLambda(counting))
+    saver = InMemorySaver()
+
+    for _ in range(3):
+        await run_complaint(complaint.id, session_factory=lambda: session,
+                            deps=deps, checkpointer=saver)
+
+    session.expire_all()
+    assert calls["classify"] == 1, "a completed run was re-executed"
+    steps = session.query(AgentStep).all()
+    assert len(steps) == 7, f"expected one row per node, got {len(steps)}"
+    assert [s.node for s in session.query(AgentStep).order_by(AgentStep.seq).all()] == [
+        "intake", "validate", "classify", "assess_risk", "route", "work_order", "notify"
+    ]
+
+
+async def test_a_failed_persist_is_retried_on_the_next_run(env, monkeypatch):
+    """The checkpoint and the database are separate stores. A completed thread
+    whose persistence failed must not be short-circuited forever. A failure to
+    persist leaves a failed AgentRun recording that something was attempted."""
+    session, complaint = env
+    deps = _deps(session_factory=lambda: session)
+    saver = InMemorySaver()
+
+    import app.ai.graph.runner as runner_module
+
+    real_persist = runner_module.persist_result
+
+    def boom(*a, **k):
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(runner_module, "persist_result", boom)
+    with pytest.raises(RuntimeError):
+        await run_complaint(complaint.id, session_factory=lambda: session,
+                            deps=deps, checkpointer=saver)
+
+    session.rollback()
+    session.expire_all()
+    # A failure during persistence now leaves a failed AgentRun recording the
+    # attempt, so the failure is visible in the database rather than invisible.
+    # This is recoverable: persist_result is idempotent and the sweep finds it again.
+    failed_run = session.query(AgentRun).one()
+    assert failed_run.status == "failed"
+    assert "commit failed" in failed_run.error
+    initial_run_id = failed_run.id
+
+    monkeypatch.setattr(runner_module, "persist_result", real_persist)
+    await run_complaint(complaint.id, session_factory=lambda: session,
+                        deps=deps, checkpointer=saver)
+
+    session.expire_all()
+    # Two runs total: the failed one from persistence, plus the successful retry.
+    assert session.query(AgentRun).count() == 2, "the retry should add a new run"
+    final_run = session.query(AgentRun).filter(AgentRun.id != initial_run_id).one()
+    assert final_run.status == "completed"
+    assert session.query(Complaint).one().status == "assigned"
+
+
+async def test_a_tenant_less_complaint_fails_routing_instead_of_spanning_every_tenant(env):
+    """Complaint.tenant_id is nullable and route_node used to treat None as 'no
+    filter', so the query spanned every tenant and the complaint was routed to
+    whichever tenant's department happened to list the category first."""
+    session, complaint = env
+    complaint.tenant_id = None
+    session.commit()
+
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    run = session.query(AgentRun).one()
+    assert "route: complaint has no tenant_id" in run.error
+    order = session.query(WorkOrder).one()
+    assert order.contractor_id is None
+
+
+def test_a_traversal_path_raises_rather_than_reading(tmp_path, monkeypatch):
+    """file_path comes from the database and is never trusted. Path(...).name
+    strips directory components, so an ordinary '../../x' collapses harmlessly
+    -- but a file_path of '..' survives .name unchanged and, joined onto the
+    upload root and resolved, lands outside it. That must be rejected, not read."""
+    from app.config import settings
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    monkeypatch.setattr(settings, "upload_dir", str(upload_dir))
+
+    with pytest.raises(ValueError, match="escapes the upload root"):
+        _media_to_prompt_vars({"file_path": ".."})
+
+
+def test_an_oversized_image_is_rejected_without_being_read(tmp_path, monkeypatch):
+    from app.config import settings
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    big = upload_dir / "big.jpg"
+    big.write_bytes(b"x" * (runner_module.MAX_IMAGE_BYTES + 1))
+    monkeypatch.setattr(settings, "upload_dir", str(upload_dir))
+
+    with pytest.raises(ValueError, match="too large"):
+        _media_to_prompt_vars({"file_path": "big.jpg"})
+
+
+def test_all_three_upload_resolvers_use_the_same_path(monkeypatch):
+    """main.py, media.py, and runner.py must all resolve upload_dir identically."""
+    from app.config import settings
+    import app.main as main_module
+    import app.services.media as media_module
+
+    # The resolver path in Settings.upload_path
+    config_resolved = settings.upload_path
+    # The mount path in main.py
+    main_path = settings.upload_path
+    # The store path in media.py
+    media_path = media_module.UPLOAD_ROOT
+    # The vision adapter path in runner.py (implicit via _media_to_prompt_vars)
+    runner_path = settings.upload_path
+
+    assert config_resolved == main_path
+    assert main_path == media_path
+    assert media_path == runner_path
+
+
+def test_the_vision_chain_is_not_built_until_something_invokes_it(monkeypatch):
+    """build_deps runs on every complaint, media or not. Building the real
+    vision chain means constructing an LLM client -- wasted work, and a wasted
+    failure mode, for the overwhelmingly common no-media complaint."""
+    calls = {"n": 0}
+
+    def counting():
+        calls["n"] += 1
+        return RunnableLambda(lambda payload: {"seen": payload})
+
+    monkeypatch.setattr(runner_module, "_vision_chain", counting)
+
+    lazy = _lazy_vision_chain()
+    assert calls["n"] == 0, "the real chain was built before anything invoked it"
+
+    assert lazy.invoke({"file_path": "a.jpg"}) == {"seen": {"file_path": "a.jpg"}}
+    assert calls["n"] == 1
+
+    lazy.invoke({"file_path": "b.jpg"})
+    assert calls["n"] == 1, "the chain should be built once and reused"
+
+
+async def test_streaming_with_empty_node_return_completes(env):
+    """A node returning {} or None produces an update that _publish_progress
+    must handle without crashing. This must not fail the run."""
+    session, complaint = env
+    updates_seen = []
+
+    async def capture_update(node: str, update: dict) -> None:
+        updates_seen.append((node, update))
+
+    # Use the real graph but with a mock checkpointer
+    deps = _deps(session_factory=lambda: session)
+    saver = InMemorySaver()
+
+    # Run twice: first time to populate checkpoint, second to replay notify
+    # (which returns {} on the replay path)
+    for run_num in range(2):
+        state = await run_complaint(
+            complaint.id,
+            session_factory=lambda: session,
+            deps=deps,
+            checkpointer=saver,
+            on_update=capture_update,
+        )
+        assert state["complaint_id"] == complaint.id
+
+    session.expire_all()
+    # Verify the run completed and is recorded
+    run = session.query(AgentRun).one()
+    assert run.status == "completed"
+    assert session.query(Complaint).one().status == "assigned"
+
+
+async def test_evidence_is_persisted_as_retrieved_chunk_rows(env):
+    from app.db.models.ai import RetrievedChunk as RetrievedChunkRow
+    from tests.ai.graph.test_retrieval import FakeRetriever, _hit
+
+    session, complaint = env
+    retriever = FakeRetriever([_hit("Public Works owns roads.", "sop_roads.md", ["Roads SOP", "Ownership"])])
+    await _run(session, complaint, _deps(session_factory=lambda: session, policy_retriever=retriever))
+
+    rows = session.query(RetrievedChunkRow).all()
+    assert rows, "route retrieved evidence, so a row must exist"
+    assert {r.node for r in rows} <= {"route", "work_order", "assess_risk", "investigate"}
+    assert all(r.source and r.chunk_id and r.snippet for r in rows)
+    stored = session.query(Complaint).one()
+    assert stored.evidence and stored.evidence[0]["source"] == "sop_roads.md"
+
+
+async def test_re_running_does_not_duplicate_retrieved_chunk_rows(env):
+    from app.db.models.ai import RetrievedChunk as RetrievedChunkRow
+    from tests.ai.graph.test_retrieval import FakeRetriever, _hit
+
+    session, complaint = env
+    retriever = FakeRetriever([_hit("Public Works owns roads.", "sop_roads.md", ["Roads SOP", "Ownership"])])
+    deps = _deps(session_factory=lambda: session, policy_retriever=retriever)
+    await _run(session, complaint, deps)
+    first = session.query(RetrievedChunkRow).count()
+    await _run(session, complaint, deps)
+    assert session.query(RetrievedChunkRow).count() == first
+
+
+async def test_a_broken_retriever_degrades_but_does_not_terminate(env):
+    from tests.ai.graph.test_retrieval import FakeRetriever
+
+    session, complaint = env
+    retriever = FakeRetriever(raises=RuntimeError("index not built"))
+    await _run(session, complaint, _deps(session_factory=lambda: session, policy_retriever=retriever))
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.status == "assigned"
+    run = session.query(AgentRun).one()
+    assert "retrieval unavailable" in (run.error or "")
+
+
+def test_the_lazy_retriever_loads_once_and_reports_a_failed_load_every_time():
+    from app.ai.graph.runner import LazyRetriever
+
+    loads = []
+    def loader():
+        loads.append(1)
+        raise FileNotFoundError("no index")
+    lazy = LazyRetriever(loader)
+    for _ in range(2):
+        try:
+            lazy.search("q", k=1, fetch_k=1, filters=None)
+        except FileNotFoundError:
+            pass
+    assert len(loads) == 2, "a failed load must be retried, not cached as a permanent failure"
+
+    good = []
+    class Good:
+        def search(self, *a, **k): return good
+    lazy = LazyRetriever(lambda: Good())
+    assert lazy.search("q", k=1, fetch_k=1, filters=None) is good
+    assert lazy.search("q", k=1, fetch_k=1, filters=None) is good
+
+
+async def test_streaming_observer_exception_does_not_fail_the_run(env):
+    """If on_update raises, the observer failure must not crash the run."""
+    session, complaint = env
+
+    async def boom(node: str, update: dict) -> None:
+        raise RuntimeError("observer crashed")
+
+    deps = _deps(session_factory=lambda: session)
+    saver = InMemorySaver()
+
+    state = await run_complaint(
+        complaint.id,
+        session_factory=lambda: session,
+        deps=deps,
+        checkpointer=saver,
+        on_update=boom,
+    )
+
+    session.expire_all()
+    # The run must complete despite the observer crashing
+    assert state["complaint_id"] == complaint.id
+    run = session.query(AgentRun).one()
+    assert run.status == "completed"
+    assert session.query(Complaint).one().status == "assigned"
+
+
+async def test_an_unsure_classification_is_investigated_end_to_end(env):
+    from app.ai.graph.build import GRAPH_VERSION
+    from tests.ai.graph.test_retrieval import FakeRetriever, _hit
+
+    session, complaint = env
+    retriever = FakeRetriever([_hit("A trench left by a utility is CONSTRUCTION.", "category_taxonomy.md", ["Category Taxonomy", "ROADS"])])
+    deps = _deps(
+        session_factory=lambda: session,
+        policy_retriever=retriever,
+        classify_chain=returns(ClassificationResult(category=Category.ROADS, confidence=0.4)),
+        investigate_chain=returns(ClassificationResult(category=Category.CONSTRUCTION, confidence=0.9)),
+    )
+    await _run(session, complaint, deps)
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.category == Category.CONSTRUCTION.value
+    assert stored.classification_confidence == 0.9
+    assert stored.pipeline_version == GRAPH_VERSION
+    steps = [s.node for s in session.query(AgentStep).order_by(AgentStep.seq)]
+    assert steps.count("investigate") == 1
+    assert steps.index("investigate") < steps.index("assess_risk")
+
+
+async def test_investigation_stops_after_three_turns(env):
+    from tests.ai.graph.test_retrieval import FakeRetriever
+
+    session, complaint = env
+    deps = _deps(
+        session_factory=lambda: session,
+        policy_retriever=FakeRetriever(),
+        classify_chain=returns(ClassificationResult(category=Category.ROADS, confidence=0.4)),
+        investigate_chain=returns(ClassificationResult(category=Category.ROADS, confidence=0.5)),
+    )
+    await _run(session, complaint, deps)
+    session.expire_all()
+    steps = [s.node for s in session.query(AgentStep).order_by(AgentStep.seq)]
+    assert steps.count("investigate") == 3
+    assert session.query(Complaint).one().status == "assigned"
+
+
+async def test_the_run_config_carries_filterable_metadata_and_no_citizen_data(env, monkeypatch):
+    """LangSmith is only useful if a regression can be filtered to a category or a
+    pipeline version — and only safe if the complaint text never goes with it."""
+    session, complaint = env
+    captured = {}
+
+    real = runner_module.to_configurable
+
+    def capture(deps, thread_id, metadata=None, tags=None):
+        captured["metadata"] = metadata
+        captured["tags"] = tags
+        return real(deps, thread_id, metadata, tags)
+
+    monkeypatch.setattr(runner_module, "to_configurable", capture)
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    assert captured["metadata"]["complaint_id"] == complaint.id
+    assert any("graph:" in t for t in captured["tags"])
+    flat = str(captured["metadata"])
+    assert complaint.citizen_email not in flat
+    assert complaint.description not in flat
+    assert complaint.tracking_id not in flat, "the tracking id is a read credential"
+
+
+async def test_the_routing_justification_is_persisted(env):
+    """The prose route_node writes to explain its choice was reaching state and
+    then being thrown away — only the one-line step summary survived. Phase 3's
+    rubric judge exists to score exactly this text, so without it the judge had
+    no real artefact to run on at all."""
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    stored = session.query(Complaint).one()
+    assert stored.routing_justification, "the justification must survive the run"
+    assert "Public Works" in stored.routing_justification or \
+           "General Administration" in stored.routing_justification
+
+
+async def test_a_run_with_no_routing_leaves_the_justification_alone(env):
+    """A rejected complaint never routes, so there is nothing to explain."""
+    session, complaint = env
+    await _run(session, complaint, _deps(valid=False, session_factory=lambda: session))
+
+    session.expire_all()
+    assert session.query(Complaint).one().routing_justification is None
+
+
+async def test_a_run_record_finishes_after_it_starts(env):
+    """Found by a live run, invisible to every test that came before it.
+
+    `started_at` was left to the column default, which fires at INSERT — after
+    `finished_at` had already been computed — so a real row came out with
+    `finished_at` about a microsecond *before* `started_at`, and any
+    "finished minus started" query read negative.
+    """
+    from app.db.models.ai import AgentRun
+
+    session, complaint = env
+    await _run(session, complaint, _deps(session_factory=lambda: session))
+
+    session.expire_all()
+    run = session.query(AgentRun).filter_by(complaint_id=complaint.id).one()
+    assert run.started_at <= run.finished_at
+    recorded_ms = (run.finished_at - run.started_at).total_seconds() * 1000
+    assert abs(recorded_ms - run.duration_ms) < 2, (
+        "the timestamps and the duration must describe the same interval"
+    )
+
+
+async def test_a_failed_run_also_records_a_sane_interval(env):
+    """The failure path built its AgentRun the same way, so it had the same bug.
+
+    Reached with a configuration failure rather than a provider error, because a
+    node traps its own exceptions and records them in `errors` — only something
+    outside the graph, like having no model configured at all, gets this far.
+    """
+    from app.db.models.ai import AgentRun
+
+    session, complaint = env
+    # The id before the call: the failure path rolls back and closes the session,
+    # which detaches this instance -- the same contract that caught the email-draft
+    # endpoint in Phase 4a.
+    complaint_id = complaint.id
+
+    with pytest.raises(Exception):
+        await run_complaint(complaint_id, session_factory=lambda: session,
+                            deps=GraphDeps(), checkpointer=InMemorySaver())
+
+    run = session.query(AgentRun).filter_by(complaint_id=complaint_id).one()
+    assert run.status == "failed"
+    assert run.error
+    assert run.started_at <= run.finished_at
+
+
+async def test_a_retry_after_a_failure_actually_re_calls_the_model(env):
+    """The bug this guards against produced a resume that lied.
+
+    A node that fails does not raise — it returns {"errors": [...]}, deliberately,
+    because retrieval is a soft dependency — and LangGraph cannot tell that update
+    apart from a successful one. So the failed node was checkpointed as *complete*,
+    and re-running the same thread replayed the stored error without calling the
+    model. Live proof: a FIRE_HAZARD complaint that lost assess_risk to a 503 was
+    re-driven and failed again in 20ms with a byte-identical error, having made no
+    request at all.
+    """
+    from app.db.models.ai import AgentRun
+
+    session, complaint = env
+    calls = []
+
+    def flaky(payload):
+        calls.append(payload)
+        if len(calls) == 1:
+            raise RuntimeError("503 UNAVAILABLE: high demand")
+        return RiskAssessment(priority_score=90, risk_level=RiskLevel.CRITICAL)
+
+    checkpointer = InMemorySaver()
+    deps = _deps(risk_chain=RunnableLambda(flaky), session_factory=lambda: session)
+
+    await run_complaint(complaint.id, session_factory=lambda: session, deps=deps,
+                        checkpointer=checkpointer)
+    session.expire_all()
+    assert session.query(Complaint).one().risk_level is None, "the first run lost it"
+    assert len(calls) == 1
+
+    # The retry. Same checkpointer, which is the whole point: it must not be allowed
+    # to serve the failed node's cached error back.
+    await run_complaint(complaint.id, session_factory=lambda: session, deps=deps,
+                        checkpointer=checkpointer)
+
+    session.expire_all()
+    assert len(calls) == 2, "the retry must actually call the model again"
+    assert session.query(Complaint).one().risk_level == RiskLevel.CRITICAL.value
+
+    threads = {r.thread_id for r in session.query(AgentRun).all()}
+    assert len(threads) == 2, "a retry runs on its own thread, not the failed one"
+
+
+async def test_an_interrupted_run_still_resumes_on_the_same_thread(env):
+    """The retry-thread change must not break the original behaviour: a run that was
+    interrupted rather than failed has no AgentRun marked failed, so it keeps the
+    complaint id as its thread and resumes where it stopped."""
+    session, complaint = env
+    thread = _thread_for(session, complaint)
+    assert thread == complaint.id

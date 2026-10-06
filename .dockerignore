@@ -1,0 +1,8 @@
+# Compose builds ./backend and ./frontend with their own contexts, so this file only
+# matters for anything built from the repository root.
+.git/
+docs/
+**/.venv/
+**/node_modules/
+**/__pycache__/
+*.db

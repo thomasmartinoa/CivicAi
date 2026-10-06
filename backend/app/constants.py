@@ -1,0 +1,98 @@
+"""Domain vocabulary shared across the application.
+
+v1 scattered these values across four modules and a seed script, which is how
+two categories ended up mapped to departments that were never created. There is
+one definition of each here, and `tests/test_config.py` asserts they agree.
+"""
+
+from enum import StrEnum
+
+
+class Category(StrEnum):
+    ROADS = "ROADS"
+    ELECTRICITY = "ELECTRICITY"
+    WATER = "WATER"
+    SANITATION = "SANITATION"
+    PUBLIC_SPACES = "PUBLIC_SPACES"
+    EDUCATION = "EDUCATION"
+    HEALTH = "HEALTH"
+    FLOODING = "FLOODING"
+    FIRE_HAZARD = "FIRE_HAZARD"
+    CONSTRUCTION = "CONSTRUCTION"
+    STRAY_ANIMALS = "STRAY_ANIMALS"
+    SEWAGE = "SEWAGE"
+
+
+class RiskLevel(StrEnum):
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class JurisdictionLevel(StrEnum):
+    WARD = "ward"
+    BLOCK = "block"
+    DISTRICT = "district"
+    CITY = "city"
+
+
+# The fallback response window per risk band, in hours. NOT the policy: a
+# tenant's own `config["sla_hours"]` is, and `sla_policy.md` is what a work
+# order cites. These values exist so a tenant that has configured nothing still
+# gets a deadline, and `tests/ai/rag/test_corpus.py` asserts the policy document
+# states the same four windows.
+DEFAULT_SLA_HOURS: dict[RiskLevel, int] = {
+    RiskLevel.CRITICAL: 4,
+    RiskLevel.HIGH: 24,
+    RiskLevel.MEDIUM: 72,
+    RiskLevel.LOW: 168,
+}
+
+
+# Every Category MUST appear here, and every department named here MUST be
+# created by app/services/seed.py. Both invariants are tested.
+CATEGORY_DEPARTMENT: dict[Category, str] = {
+    Category.ROADS: "Public Works Department",
+    Category.CONSTRUCTION: "Public Works Department",
+    Category.ELECTRICITY: "Electricity Board",
+    Category.WATER: "Water Supply Department",
+    Category.SANITATION: "Sanitation Department",
+    Category.SEWAGE: "Sanitation Department",
+    Category.PUBLIC_SPACES: "Parks & Recreation",
+    Category.EDUCATION: "Education Department",
+    Category.HEALTH: "Health Department",
+    Category.FLOODING: "Flood Control Authority",
+    Category.FIRE_HAZARD: "Fire Department",
+    Category.STRAY_ANIMALS: "Animal Control",
+}
+
+
+# ── lifecycle states an officer may set ─────────────────────────────────────
+#
+# The pipeline writes a complaint's status; an officer may move it onwards from
+# there. The transitions are an allow-list rather than a free field, so that a
+# misdirected PATCH cannot drag a rejected complaint back into the queue or mark an
+# unprocessed one resolved.
+
+COMPLAINT_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "processed": ("assigned", "closed"),
+    "assigned": ("in_progress", "resolved", "closed"),
+    "in_progress": ("resolved", "closed"),
+    "resolved": ("closed", "in_progress"),
+    "closed": (),
+}
+"""`in_progress` is reachable back from `resolved` on purpose: work that was called
+done and was not is the common case, and the alternative is an officer opening a
+duplicate complaint."""
+
+WORK_ORDER_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "created": ("assigned", "cancelled"),
+    "assigned": ("in_progress", "completed", "cancelled"),
+    "in_progress": ("completed", "cancelled"),
+    "completed": ("in_progress",),
+    "cancelled": (),
+}
+
+WORK_ORDER_CLOSED = ("completed", "cancelled")
+"""States in which a work order no longer occupies its contractor."""

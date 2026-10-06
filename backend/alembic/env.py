@@ -6,7 +6,8 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.config import settings
-from app.database import Base
+from app.db.base import Base
+import app.db.models  # noqa: F401 — registers every model on Base.metadata
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -69,7 +70,9 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=connection.dialect.name == "sqlite",
         )
 
         with context.begin_transaction():

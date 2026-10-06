@@ -1,0 +1,5 @@
+# node_modules is 190 MB and the Dockerfile runs `npm ci` itself, so copying it in is
+# pure waste — and a host-built binary dependency would be the wrong architecture.
+node_modules/
+dist/
+.env

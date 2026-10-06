@@ -1,0 +1,578 @@
+"""The only entry point into the graph.
+
+Owns the checkpointer, injects dependencies, and is the single place that
+writes to the database — nodes stay pure so they can be tested against fakes.
+
+`app/api/` may import this module and nothing else under `app/ai/graph/`;
+`tests/test_import_rules.py` enforces that.
+"""
+
+import time
+from collections.abc import Callable
+from datetime import timedelta
+from pathlib import Path
+
+from app.ai.graph.build import GRAPH_VERSION, compile_graph
+from app.ai.graph.deps import GraphDeps, to_configurable
+from app.ai.observability import run_metadata
+from app.ai.graph.state import ComplaintState, build_serializer, initial_state
+from app.ai.schemas import Coords, MediaRef
+from app.db.base import utcnow
+
+CHECKPOINT_DB = str(Path(__file__).resolve().parents[3] / "checkpoints.db")
+
+
+def build_deps(session_factory: Callable, complaint) -> GraphDeps:
+    """Wire the real chains with the complaint's email injected into notify.
+
+    Wraps notify_citizen in a closure over the complaint's email address, since
+    the notify node doesn't know the recipient. Tests that need to override
+    dependencies pass their own GraphDeps instead of calling this.
+    """
+    from app.ai.llm import Task, build_structured, cache_for
+    from app.ai.schemas import (
+        ClassificationResult, CostEstimate, RiskAssessment, ValidationResult, VisionObservation,
+    )
+    from app.services.geocoding import reverse_geocode
+    from app.services.notify import notify_citizen
+    from app.services.tenancy import tenant_sla_lookup
+
+    complaint_email = complaint.citizen_email
+    def notify(**kwargs):
+        notify_citizen(recipient=complaint_email, session_factory=session_factory, **kwargs)
+
+    return GraphDeps(
+        validate_chain=build_structured(Task.VALIDATE, ValidationResult, "validate",
+                                        cache=cache_for("validate")),
+        classify_chain=build_structured(Task.CLASSIFY, ClassificationResult, "classify",
+                                        cache=cache_for("classify")),
+        investigate_chain=build_structured(Task.INVESTIGATE, ClassificationResult, "investigate",
+                                           cache=cache_for("investigate")),
+        risk_chain=build_structured(Task.ASSESS_RISK, RiskAssessment, "assess_risk",
+                                    cache=cache_for("assess_risk")),
+        # Vision is multimodal -- the payload carries a base64 image, not prose --
+        # so it is not cached.
+        vision_chain=_lazy_vision_chain(),
+        work_order_chain=build_structured(Task.WORK_ORDER, CostEstimate, "work_order",
+                                          cache=cache_for("work_order")),
+        policy_retriever=_POLICY_RETRIEVER,
+        cases_retriever=_cases_retriever_if_present(),
+        session_factory=session_factory,
+        geocode=reverse_geocode,
+        notify=notify,
+        sla_hours=tenant_sla_lookup(session_factory),
+    )
+
+
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def _media_to_prompt_vars(payload: dict) -> dict:
+    """Adapt the media node's {"file_path"} contract to the vision prompt.
+
+    The prompt takes `image_url` and `image_context`; the node deliberately knows
+    nothing about loading files, so the bridge lives here. Reading bytes in the
+    node would make it untestable without a filesystem.
+
+    file_path comes from the database and is never trusted: a traversal here
+    would be an arbitrary local file read, base64-encoded and sent to the
+    model. Path(...).name discards any directory component -- the strongest
+    containment available, since ComplaintMedia.file_path is stored as
+    "uploads/<name>" with no subdirectories.
+    """
+    import base64
+    import mimetypes
+
+    from app.config import settings
+
+    upload_root = settings.upload_path
+    candidate = (upload_root / Path(payload["file_path"]).name).resolve()
+    if upload_root not in candidate.parents:
+        raise ValueError(f"media path escapes the upload root: {payload['file_path']!r}")
+    if candidate.stat().st_size > MAX_IMAGE_BYTES:
+        raise ValueError(f"media file too large: {candidate.stat().st_size} bytes")
+
+    mime = mimetypes.guess_type(str(candidate))[0] or "image/jpeg"
+    encoded = base64.b64encode(candidate.read_bytes()).decode("ascii")
+    return {
+        "image_url": f"data:{mime};base64,{encoded}",
+        "image_context": "Describe any infrastructure problem visible in this photograph.",
+    }
+
+
+def _vision_chain():
+    """Wire `_media_to_prompt_vars` in front of the vision LLM chain."""
+    from langchain_core.runnables import RunnableLambda
+
+    from app.ai.llm import Task, build_structured, cache_for
+    from app.ai.schemas import VisionObservation
+
+    return RunnableLambda(_media_to_prompt_vars) | build_structured(
+        Task.VISION, VisionObservation, "vision"
+    )
+
+
+def _lazy_vision_chain():
+    """Defer building the real vision chain until a node actually invokes it.
+
+    build_deps runs once per complaint regardless of whether it carries media,
+    and building the chain means constructing an LLM client (which can itself
+    raise NoModelConfigured). The overwhelmingly common case is no media at
+    all, so eagerly paying that cost -- and that failure mode -- on every run
+    is wasted work for a chain most complaints never touch.
+    """
+    from langchain_core.runnables import RunnableLambda
+
+    cache: dict = {}
+
+    def invoke_lazily(payload: dict):
+        if "chain" not in cache:
+            cache["chain"] = _vision_chain()
+        return cache["chain"].invoke(payload)
+
+    return RunnableLambda(invoke_lazily)
+
+
+class LazyRetriever:
+    """Load the index on first use, not at process start.
+
+    The API must boot without an index (the ingest CLI may not have run yet),
+    and tests must never touch the real one. A failed load is not cached: every
+    call retries, so each node reports the problem in its own error entry and a
+    later ingest is picked up on the next process start.
+    """
+
+    def __init__(self, loader: Callable) -> None:
+        self._loader = loader
+        self._retriever = None
+
+    def search(self, query: str, *, k: int, fetch_k: int, filters: dict | None):
+        if self._retriever is None:
+            self._retriever = self._loader()
+        return self._retriever.search(query, k=k, fetch_k=fetch_k, filters=filters)
+
+
+def _load_policy_retriever():
+    from app.ai.rag.embeddings import build_embedder
+    from app.ai.rag.ingest import COLLECTION, collection_index_dir, load_policy_retriever
+    from app.config import settings
+
+    return load_policy_retriever(
+        embedder=build_embedder(),
+        index_dir=collection_index_dir(settings.rag_index_path, COLLECTION),
+    )
+
+
+def _load_cases_retriever():
+    from app.ai.rag.cases import CASES_COLLECTION, load_cases_retriever
+    from app.ai.rag.embeddings import build_embedder
+    from app.ai.rag.ingest import collection_index_dir
+    from app.config import settings
+
+    return load_cases_retriever(
+        embedder=build_embedder(),
+        index_dir=collection_index_dir(settings.rag_index_path, CASES_COLLECTION),
+    )
+
+
+# Module-level, not built fresh inside build_deps: build_deps runs once per
+# complaint, and loading the FAISS index is expensive, so it must happen at
+# most once per process. LazyRetriever only caches success, so a failed load
+# still retries on the next complaint rather than staying broken forever.
+_POLICY_RETRIEVER = LazyRetriever(_load_policy_retriever)
+_CASES_RETRIEVER = LazyRetriever(_load_cases_retriever)
+
+
+def _cases_retriever_if_present():
+    """None when no cases index exists yet — that is normal before the first
+    resolution and must not be reported as an error by assess_risk.
+
+    The existence check runs per complaint (one stat call) but hands back the
+    one module-level LazyRetriever, so the index is still loaded at most once
+    per process, and an ingest that lands mid-process is picked up.
+    """
+    from app.ai.rag.cases import CASES_COLLECTION
+    from app.ai.rag.ingest import collection_index_dir
+    from app.config import settings
+
+    if not (collection_index_dir(settings.rag_index_path, CASES_COLLECTION) / "manifest.json").exists():
+        return None
+    return _CASES_RETRIEVER
+
+
+def _state_for(complaint) -> ComplaintState:
+    coords = None
+    if complaint.latitude is not None and complaint.longitude is not None:
+        coords = Coords(latitude=complaint.latitude, longitude=complaint.longitude)
+    return initial_state(
+        complaint_id=complaint.id,
+        tracking_id=complaint.tracking_id,
+        tenant_id=complaint.tenant_id,
+        raw_description=complaint.description,
+        media=[
+            MediaRef(file_path=m.file_path, media_type=m.media_type,
+                     original_filename=m.original_filename)
+            for m in (complaint.media or [])
+        ],
+        coords=coords,
+    )
+
+
+def _status_for(state: ComplaintState) -> str:
+    """Outcome first, errors last.
+
+    A run that finished with a soft error — geocoding timed out, say — is still
+    assigned. Only a run that produced nothing is 'failed'. And a rejection is
+    never 'failed': v1 conflated the two and lost both.
+    """
+    if state["terminal_reason"]:
+        return "rejected"
+    if state["work_order"]:
+        return "assigned"
+    if state["errors"]:
+        return "failed"
+    return "processed"
+
+
+def _document_chunk_ids(session, chunk_ids: list[str | None]) -> dict[str, str]:
+    """Map content-derived chunk ids to DocumentChunk primary keys.
+
+    One query for the whole batch rather than one per citation: a run with four
+    grounded nodes cites a dozen chunks. The id lives inside metadata_json, so
+    this reads it through SQLAlchemy's JSON accessor, which compiles to
+    json_extract on SQLite and ->> on PostgreSQL.
+    """
+    from app.db.models.ai import DocumentChunk
+
+    wanted = [c for c in chunk_ids if c]
+    if not wanted:
+        return {}
+    key = DocumentChunk.metadata_json["chunk_id"].as_string()
+    rows = session.query(DocumentChunk.id, key).filter(key.in_(wanted)).all()
+    return {chunk_id: row_id for row_id, chunk_id in rows}
+
+def persist_result(state: ComplaintState, session, *, duration_ms: int,
+                   thread_id: str | None = None) -> None:
+    """Write complaint state changes and audit trail to the database.
+
+    `decision_log` carries an `operator.add` reducer, so it accumulates across
+    every invocation against the same checkpoint thread. This function queries
+    the database to determine how many AgentSteps were already persisted for
+    this complaint, then writes only the new decisions.
+    """
+    from app.db.models.ai import AgentRun, AgentStep, RetrievedChunk as RetrievedChunkRow
+    from app.db.models.complaint import Complaint
+    from app.db.models.workflow import WorkOrder
+
+    complaint = session.query(Complaint).filter(Complaint.id == state["complaint_id"]).one()
+    status = _status_for(state)
+
+    complaint.status = status
+    complaint.terminal_reason = state["terminal_reason"]
+    # The attempt's own thread, so a retried complaint points at the checkpoint
+    # that actually produced its result rather than the abandoned first one.
+    complaint.graph_thread_id = thread_id or state["complaint_id"]
+    complaint.pipeline_version = GRAPH_VERSION
+
+    if state["classification"]:
+        complaint.category = state["classification"].category.value
+        complaint.subcategory = state["classification"].subcategory
+        complaint.classification_confidence = state["classification"].confidence
+    if state["risk"]:
+        complaint.priority_score = state["risk"].priority_score
+        complaint.risk_level = state["risk"].risk_level.value
+    if state["location"]:
+        location = state["location"]
+        complaint.address = location.address or complaint.address
+        complaint.ward = location.ward or complaint.ward
+        complaint.block = location.block or complaint.block
+        complaint.district = location.district or complaint.district
+        complaint.state = location.state or complaint.state
+    if state["evidence"]:
+        complaint.evidence = [chunk.model_dump() for chunk in state["evidence"]]
+    if state["routing"]:
+        complaint.routing_justification = state["routing"].justification
+
+    if state["work_order"] and status == "assigned":
+        draft = state["work_order"]
+        routing = state["routing"]
+        existing = (
+            session.query(WorkOrder)
+            .filter(WorkOrder.complaint_id == complaint.id)
+            .one_or_none()
+        )
+        # A resumed run replays nodes that already succeeded. work_orders.complaint_id
+        # is unique, so a second insert raises IntegrityError and the resume dies on
+        # persistence — the exact scenario checkpointing exists to support.
+        if existing is None:
+            session.add(WorkOrder(
+                complaint_id=complaint.id,
+                tenant_id=complaint.tenant_id,
+                contractor_id=routing.contractor_id if routing else None,
+                status="assigned" if (routing and routing.contractor_id) else "created",
+                sla_hours=draft.sla_hours,
+                sla_deadline=utcnow() + timedelta(hours=draft.sla_hours),
+                estimated_cost=draft.estimated_cost,
+                cost_basis=draft.cost_basis,
+                materials=draft.materials,
+                notes=draft.summary,
+            ))
+
+    # started_at is set explicitly rather than left to the column default, which
+    # fires at INSERT — i.e. *after* finished_at was computed — so the row came out
+    # with finished_at a hair before started_at and any "finished minus started"
+    # query read negative. Derived from the duration so the pair agrees.
+    finished = utcnow()
+    run = AgentRun(
+        complaint_id=complaint.id,
+        thread_id=thread_id or state["complaint_id"],
+        status="completed" if status != "failed" else "failed",
+        graph_version=GRAPH_VERSION,
+        started_at=finished - timedelta(milliseconds=duration_ms),
+        finished_at=finished,
+        duration_ms=duration_ms,
+        error="; ".join(state["errors"]) or None,
+    )
+    session.add(run)
+    session.flush()
+
+    # The checkpoint and the database are separate stores. A previous invocation
+    # may have completed the graph and then failed to persist, so "the thread is
+    # finished" is not evidence that the results were written. Count from the
+    # database to determine which decision_log entries are new.
+    already_recorded = (
+        session.query(AgentStep)
+        .join(AgentRun, AgentStep.run_id == AgentRun.id)
+        .filter(AgentRun.complaint_id == state["complaint_id"])
+        .count()
+    )
+    # The decision_log reducer accumulates across invocations, so a resumed run
+    # arrives carrying the earlier run's entries. Write only what is new.
+    for seq, decision in enumerate(state["decision_log"][already_recorded:], start=already_recorded):
+        session.add(AgentStep(
+            run_id=run.id,
+            seq=seq,
+            node=decision.node,
+            status="ok",
+            duration_ms=decision.duration_ms,
+            output_summary=decision.summary,
+        ))
+
+    # Same reasoning as decision_log: `evidence` accumulates across resumes,
+    # and the database knows how many rows this complaint already has.
+    evidence_recorded = (
+        session.query(RetrievedChunkRow)
+        .join(AgentRun, RetrievedChunkRow.run_id == AgentRun.id)
+        .filter(AgentRun.complaint_id == state["complaint_id"])
+        .count()
+    )
+    new_evidence = state["evidence"][evidence_recorded:]
+    chunk_row_ids = _document_chunk_ids(session, [c.chunk_id for c in new_evidence])
+    for chunk in new_evidence:
+        session.add(RetrievedChunkRow(
+            run_id=run.id,
+            node=chunk.node,
+            source=chunk.source,
+            chunk_id=chunk.chunk_id,
+            # None when the chunk has since been re-indexed under a new id. The
+            # citation stays readable from source, headers and snippet.
+            document_chunk_id=chunk_row_ids.get(chunk.chunk_id),
+            headers=list(chunk.headers),
+            score=chunk.score,
+            snippet=chunk.snippet[:2000],
+        ))
+
+    session.commit()
+
+
+async def _advance(graph, state: ComplaintState, config) -> tuple[ComplaintState, bool]:
+    """Start, resume, or skip -- whichever the checkpoint for this thread calls for.
+
+    Passing an input to `ainvoke` always restarts the graph from START, discarding
+    whatever the checkpoint holds; only `ainvoke(None, config)` resumes at the node
+    a partial run stopped at. Calling `ainvoke` at all on a thread that already ran
+    to completion replays every node -- including every real LLM call -- for a
+    citizen who was already notified. `aget_state` distinguishes the three cases:
+    `created_at is None` means no checkpoint exists yet for this thread (a first
+    run); a non-empty `next` means a previous run stopped part-way; otherwise the
+    thread finished and there is nothing left to advance.
+
+    Returns `(result, ran)`. `ran` is False when nothing was invoked because the
+    thread was already complete -- the caller must not treat the (unchanged,
+    already-persisted) state as a new run to persist again.
+    """
+    snapshot = await graph.aget_state(config)
+    if snapshot.created_at is None:
+        return await graph.ainvoke(state, config), True
+    if snapshot.next:
+        return await graph.ainvoke(None, config), True
+    return snapshot.values, False
+
+
+async def _advance_streaming(
+    graph,
+    state: ComplaintState,
+    config,
+    on_update: Callable[[str, dict], object],
+) -> tuple[ComplaintState, bool]:
+    """Stream graph progress via on_update callback, mirroring _advance's three-way decision.
+
+    When the thread is already complete, yields zero chunks (consistent with astream
+    on a finished thread), so ran is False and the caller skips persistence.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    snapshot = await graph.aget_state(config)
+    if snapshot.created_at is None:
+        graph_input = state
+    elif snapshot.next:
+        graph_input = None
+    else:
+        # Thread already completed; astream yields zero chunks and we return stored state
+        return snapshot.values, False
+
+    # Stream the run and collect updates
+    async for chunk in graph.astream(graph_input, config, stream_mode="updates"):
+        # chunk is {node: update_dict}
+        for node, update in chunk.items():
+            try:
+                await on_update(node, update)
+            except Exception:
+                logger.exception("observer failed for node %s; continuing", node)
+
+    # Read the final state from the checkpoint
+    final = await graph.aget_state(config)
+    return final.values, True
+
+
+def _thread_for(session, complaint) -> str:
+    """The checkpoint thread for this attempt.
+
+    The complaint id on a first attempt, so an interrupted run resumes. After a
+    failed run, the attempt number is appended, because the failed node is
+    checkpointed as complete and resuming that thread would replay its error rather
+    than retry it — see run_complaint's docstring.
+    """
+    from app.db.models.ai import AgentRun
+
+    failures = (session.query(AgentRun)
+                .filter(AgentRun.complaint_id == complaint.id,
+                        AgentRun.status == "failed")
+                .count())
+    return complaint.id if not failures else f"{complaint.id}:retry{failures}"
+
+
+async def run_complaint(
+    complaint_id: str,
+    *,
+    session_factory: Callable,
+    deps: GraphDeps | None = None,
+    checkpointer=None,
+    on_update: Callable[[str, dict], object] | None = None,
+) -> ComplaintState:
+    """Run one complaint through the graph and persist what happened.
+
+    `thread_id` is the complaint id for a first attempt, so re-invoking resumes that
+    complaint's run rather than starting a new one.
+
+    **A retry after a failed run gets a fresh thread**, suffixed with the attempt
+    number. This is not an optimisation, it is the difference between a resume that
+    works and one that lies. A node that fails does not raise — it returns
+    `{"errors": [...]}`, deliberately, because retrieval is a soft dependency — and
+    LangGraph has no way to tell that update apart from a successful one. So the
+    failed node is checkpointed as *complete*, and resuming the same thread replays
+    the stored error without ever re-calling the model. A live run proved it: a
+    FIRE_HAZARD complaint that lost assess_risk to a 503 was re-driven and failed
+    again in 20 milliseconds with a byte-identical error, having made no request at
+    all. The eval harness had the same bug and the same fix — `load_log` excludes
+    errored rows so `--resume` cannot bake in an outage.
+
+    The previous thread's checkpoint is left in place, so a failed run stays
+    inspectable.
+
+    session_factory must return a session this call may close. It is closed on
+    every path, including on error, which expunges its identity map — so a
+    caller holding ORM objects across this call must re-query them afterwards
+    rather than reuse the instances it passed in.
+
+    When `on_update` is supplied, the run streams via astream instead of invoking,
+    calling on_update(node, update) for each node's updates.
+    """
+    from app.db.models.ai import AgentRun
+    from app.db.models.complaint import Complaint
+
+    session = session_factory()
+    try:
+        complaint = session.query(Complaint).filter(Complaint.id == complaint_id).one()
+        state = _state_for(complaint)
+        deps = deps or build_deps(session_factory, complaint=complaint)
+        thread_id = _thread_for(session, complaint)
+        config = to_configurable(
+            deps, thread_id=thread_id,
+            metadata=run_metadata(complaint),
+            tags=[f"graph:{GRAPH_VERSION}"],
+        )
+
+        started = time.monotonic()
+        try:
+            if checkpointer is not None:
+                graph = compile_graph(checkpointer=checkpointer)
+                if on_update is None:
+                    result, ran = await _advance(graph, state, config)
+                else:
+                    result, ran = await _advance_streaming(graph, state, config, on_update)
+            else:
+                from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+                async with AsyncSqliteSaver.from_conn_string(CHECKPOINT_DB) as saver:
+                    # Without this, Pydantic models in state come back from the
+                    # checkpoint as plain dicts and every later field access fails.
+                    saver.serde = build_serializer()
+                    graph = compile_graph(checkpointer=saver)
+                    if on_update is None:
+                        result, ran = await _advance(graph, state, config)
+                    else:
+                        result, ran = await _advance_streaming(graph, state, config, on_update)
+            duration_ms = int((time.monotonic() - started) * 1000)
+
+            # The checkpoint and the database are separate stores. A previous invocation
+            # may have completed the graph and then failed to persist, so "the thread is
+            # finished" is not evidence that the results were written. Ask the database.
+            # Only skip persistence if a successful run was already recorded; a failed
+            # run means persistence was never attempted or failed, so retry it.
+            already_persisted = (
+                session.query(AgentRun)
+                .filter(AgentRun.complaint_id == complaint_id, AgentRun.status != "failed")
+                .count() > 0
+            )
+            if ran or not already_persisted:
+                persist_result(result, session, duration_ms=duration_ms, thread_id=thread_id)
+            return result
+        except Exception as exc:
+            # Without this the complaint stays 'submitted' with nothing recording that
+            # anything was attempted. The checkpoint survives, so a resume can still
+            # pick it up — but under background execution the failure is otherwise
+            # invisible in the database. This trap covers both node failures and
+            # persistence failures; the latter are recoverable (the sweep re-finds the
+            # complaint and persist_result idempotency handles replay), so the value
+            # here is the audit trail, not recovery. Note that deps construction is
+            # deliberately outside this trap because a configuration failure (e.g., no
+            # LLM provider) is not the complaint's failure.
+            duration_ms = int((time.monotonic() - started) * 1000)
+            session.rollback()
+            failed_at = utcnow()
+            session.add(AgentRun(
+                complaint_id=complaint_id,
+                thread_id=complaint_id,
+                status="failed",
+                graph_version=GRAPH_VERSION,
+                started_at=failed_at - timedelta(milliseconds=duration_ms),
+                finished_at=failed_at,
+                duration_ms=duration_ms,
+                error=f"{type(exc).__name__}: {exc}",
+            ))
+            session.commit()
+            raise
+    finally:
+        session.close()
