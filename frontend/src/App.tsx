@@ -12,6 +12,7 @@ import AdminWorkOrders from './pages/admin/AdminWorkOrders';
 import AdminChat from './pages/admin/AdminChat';
 import AdminRuns from './pages/admin/AdminRuns';
 import AdminCorpus from './pages/admin/AdminCorpus';
+import AdminEvals from './pages/admin/AdminEvals';
 
 const queryClient = new QueryClient();
 
@@ -32,6 +33,7 @@ export default function App() {
             <Route path="admin/chat" element={<AdminChat />} />
             <Route path="admin/runs" element={<AdminRuns />} />
             <Route path="admin/corpus" element={<AdminCorpus />} />
+            <Route path="admin/evals" element={<AdminEvals />} />
           </Route>
         </Routes>
       </BrowserRouter>

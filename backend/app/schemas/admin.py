@@ -377,3 +377,56 @@ class CorpusStatus(BaseModel):
     built_at: datetime | None = None
     documents: list[CorpusDocument] = []
     error: str | None = None
+
+
+class EvalMetric(BaseModel):
+    metric: str
+    value: float
+    """Never null, and that is the contract rather than an oversight.
+
+    `app/evals/record.py` *skips* a metric it could not compute instead of storing
+    it, because an unmeasured value written as 0.0 would make the regression gate
+    compare against a number nothing produced. So an unmeasured metric is absent from
+    this list, and a reader must treat a missing metric as "not measured" rather than
+    assuming the run reported every metric it could have.
+    """
+    detail: dict | None = None
+
+
+class EvalRunRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    suite: str
+    dataset_name: str | None = None
+    dataset_hash: str | None = None
+    git_sha: str | None = None
+    config_label: str | None = None
+    """`keyword`, `llm_only` or `full` — the three columns of the Phase 3 comparison:
+    no model, model without retrieval, model with retrieval."""
+    started_at: datetime
+    finished_at: datetime | None = None
+    metrics: list[EvalMetric] = []
+
+
+class EvalBaseline(BaseModel):
+    """The figure the regression gate compares against."""
+
+    macro_f1: float | None = None
+    dataset_hash: str | None = None
+    git_sha: str | None = None
+    validate_version: str | None = None
+    note: str | None = None
+    stale: bool = False
+    """True when the baseline was measured under a different validator than the one
+    now in use. A regression against a stale baseline may be a population change
+    rather than a model change, and a dashboard that does not say so is worse than
+    one with no baseline at all."""
+
+
+class EvalDashboard(BaseModel):
+    baseline: EvalBaseline | None = None
+    runs: list[EvalRunRow] = []
+    latest_by_config: dict[str, float | None] = {}
+    """macro_f1 for the most recent run of each configuration, which is the
+    three-column comparison the Phase 3 report is built on."""

@@ -14,6 +14,7 @@ const OFFICER_LINKS = [
   { to: '/admin/chat', label: 'Assistant' },
   { to: '/admin/runs', label: 'Traces' },
   { to: '/admin/corpus', label: 'Knowledge' },
+  { to: '/admin/evals', label: 'Evaluation' },
 ];
 
 export default function Layout() {

@@ -70,3 +70,4 @@ export const getRuns = (params?: Record<string, string>) => api.get('/admin/runs
 export const getRunDetail = (id: string) => api.get(`/admin/runs/${id}`);
 
 export const getCorpus = () => api.get('/admin/corpus');
+export const getEvals = () => api.get('/admin/evals');

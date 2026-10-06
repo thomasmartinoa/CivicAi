@@ -16,6 +16,7 @@ Two things here are not obvious:
 
 import logging
 import math
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -31,6 +32,7 @@ from app.db.session import get_db
 from app.schemas.admin import (
     DESCRIPTION_PREVIEW_CHARS, AdminComplaintDetail, AgentRunDetail, AgentRunPage,
     AgentRunRow, AgentStepRow, AnalyticsResponse, BriefingResponse, CorpusDocument,
+    EvalBaseline, EvalDashboard, EvalMetric, EvalRunRow,
     CorpusStatus,
     ComplaintPage, ComplaintRow,
     ComplaintUpdate, WorkOrderUpdate,
@@ -842,3 +844,75 @@ def corpus_status(officer: CurrentOfficer) -> CorpusStatus:
             key=lambda d: d.source,
         ),
     )
+
+
+BASELINE_PATH = Path(__file__).resolve().parents[1] / "evals" / "baselines" / "core.json"
+"""Read as a file, not imported. `tests/test_import_rules.py` forbids the application
+importing `app/evals/` at all — the harness is a consumer of the app and never a
+dependency of it — so this reads its published artefact the same way the corpus
+endpoint reads the FAISS index."""
+
+
+@router.get("/evals", response_model=EvalDashboard)
+def eval_dashboard(
+    officer: CurrentOfficer,
+    db: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> EvalDashboard:
+    """Eval runs, their metrics, and the baseline the regression gate uses.
+
+    Not tenant-scoped, unlike everything else on this router: an eval run measures
+    the model against a fixed golden set and belongs to no municipality. It is behind
+    officer auth because it exposes how well the system actually performs, which is
+    not a thing to publish unauthenticated.
+    """
+    import json
+
+    from app.ai.prompts import LATEST
+    from app.db.models.evaluation import EvalResult, EvalRun
+
+    runs = (db.query(EvalRun).order_by(EvalRun.started_at.desc()).limit(limit).all())
+    results = (db.query(EvalResult)
+               .filter(EvalResult.eval_run_id.in_([r.id for r in runs]))
+               .all()) if runs else []
+
+    by_run: dict[str, list[EvalMetric]] = {}
+    for result in results:
+        by_run.setdefault(result.eval_run_id, []).append(EvalMetric(
+            metric=result.metric, value=result.value,
+            detail=result.detail_json if isinstance(result.detail_json, dict) else None,
+        ))
+
+    rows = [
+        EvalRunRow(**{c.name: getattr(run, c.name) for c in EvalRun.__table__.columns},
+                   metrics=sorted(by_run.get(run.id, []), key=lambda m: m.metric))
+        for run in runs
+    ]
+
+    # The newest run of each configuration, which is the three-column comparison.
+    latest: dict[str, float | None] = {}
+    for row in rows:                      # already newest-first
+        if row.config_label and row.config_label not in latest:
+            latest[row.config_label] = next(
+                (m.value for m in row.metrics if m.metric == "macro_f1"), None)
+
+    baseline = None
+    if BASELINE_PATH.exists():
+        try:
+            payload = json.loads(BASELINE_PATH.read_text())
+            recorded = payload.get("validate_version")
+            baseline = EvalBaseline(
+                macro_f1=payload.get("macro_f1"),
+                dataset_hash=payload.get("dataset_hash"),
+                git_sha=payload.get("git_sha"),
+                validate_version=recorded,
+                note=payload.get("note"),
+                # Derived rather than stored, so it cannot drift from the truth: the
+                # baseline is stale the moment the validator in use differs from the
+                # one it was measured under.
+                stale=bool(recorded and recorded != LATEST.get("validate")),
+            )
+        except (OSError, json.JSONDecodeError):
+            logger.warning("the eval baseline could not be read", exc_info=True)
+
+    return EvalDashboard(baseline=baseline, runs=rows, latest_by_config=latest)

@@ -235,3 +235,41 @@ export interface CorpusStatus {
   documents: CorpusDocument[];
   error: string | null;
 }
+
+export interface EvalMetric {
+  metric: string;
+  /** Never null: the harness skips a metric it could not compute rather than
+   *  storing 0.0, so a *missing* metric means "not measured". */
+  value: number;
+  detail: Record<string, unknown> | null;
+}
+
+export interface EvalRunRow {
+  id: string;
+  suite: string;
+  dataset_name: string | null;
+  dataset_hash: string | null;
+  git_sha: string | null;
+  /** keyword | llm_only | full — no model, model without retrieval, model with it. */
+  config_label: string | null;
+  started_at: string;
+  finished_at: string | null;
+  metrics: EvalMetric[];
+}
+
+export interface EvalBaseline {
+  macro_f1: number | null;
+  dataset_hash: string | null;
+  git_sha: string | null;
+  validate_version: string | null;
+  note: string | null;
+  /** Measured under a different validator than the one in use, so a regression
+   *  against it may be a population change rather than a model change. */
+  stale: boolean;
+}
+
+export interface EvalDashboard {
+  baseline: EvalBaseline | null;
+  runs: EvalRunRow[];
+  latest_by_config: Record<string, number | null>;
+}
