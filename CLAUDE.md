@@ -28,7 +28,7 @@ it is where the known defects live.
 | 4a | Officer auth, the complaint queue, work orders, analytics, briefing, email approval, citizen OTP + tokens, the public dashboard |
 | 4b | Officer ReAct agent: six read-only tenant-bound tools, the loop, `POST /admin/chat` over SSE, transcripts on `agent_runs`/`agent_steps` |
 | 5 | Six screens: officer chat, agent traces, evidence panel, live pipeline, knowledge base, evaluation — each rendered and looked at |
-| 6 | Polish, ADRs, docker-compose (next) |
+| 6 | Eleven docs, eight ADRs, README, docker-compose reviewed and fixed |
 
 ## Commands
 
@@ -158,6 +158,16 @@ day and leaves little over. `--flash-only` keeps a sweep off the strong tier.
   what pytest cannot: whether retrieval helps, whether a threshold is right, whether
   a prompt change is an improvement or a trade. `docs/07-evaluation-and-observability.md`
   has the current numbers and, more usefully, what is *not* measured.
+
+## Documentation
+
+`docs/00-README.md` is the index. Eleven numbered documents, each explaining a concept
+through this repository's own code and saying what was rejected. `docs/adr/` has one
+file per contested decision, each ending with **what it costs** rather than why it was
+obviously right.
+
+Read `docs/07` §5 if you are sceptical, and the **Carried forward** section of the most
+recent phase plan before changing anything.
 
 ## Where the known defects are
 

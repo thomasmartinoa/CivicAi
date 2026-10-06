@@ -135,3 +135,43 @@ screenshots kept current.**
 - **The chat screen holds its conversation in component state**, so navigating away
   loses it. Server-side sessions were deferred in Phase 4b and the screen now makes
   that visible.
+
+---
+
+## Phase 6 — polish and documentation
+
+Landed 2026-10-06. Not given its own plan file: the spec's Phase 6 is a list of
+deliverables rather than a design problem, and each one either exists or does not.
+
+| Deliverable | State |
+|---|---|
+| Eleven numbered documents | ✅ `docs/00` – `docs/10` |
+| ADRs | ✅ 8 files in `docs/adr/` |
+| README with screenshots | ✅ six screens |
+| docker-compose | ⚠️ **reviewed and fixed, not run** — see below |
+
+### The docker stack
+
+Five defects were found by reading it against the application's requirements, each
+confirmed against the code rather than suspected:
+
+1. **The backend would have crash-looped on every start.** `environment` defaults to
+   `production` and `secret_key` to a known placeholder, and `app/main.py` refuses
+   that exact combination by design. Nothing passed either variable.
+2. **It pointed at Postgres and there is no Postgres driver** in `requirements.txt`.
+   It would have failed at import with `No module named psycopg2`.
+3. **No migrations ran**, so the database would have had no tables.
+4. **The image pinned Python 3.12** while the project is built and tested on 3.14.
+5. **`GEMINI_API_KEY` was never passed**, so the pipeline would fail at its first
+   model call in a container that otherwise looked healthy.
+
+**It still has not been run.** The machine has the docker binary but no running
+daemon, no compose plugin and a user outside the docker group — three root commands,
+which are listed at the top of `docker-compose.yml`. Until somebody runs it, treat
+that file the way this project treats any untested claim: the review found five real
+problems, and running it will probably find a sixth.
+
+Postgres is now a commented service with the three reasons it is not the default: no
+driver, no migration has ever run against it, no test covers it. The models were
+written to work on both — `String(36)` ids, `JSON` rather than `ARRAY` — but making it
+the default would be claiming something untested.

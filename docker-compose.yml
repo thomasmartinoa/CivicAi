@@ -1,10 +1,15 @@
 # One command to run CivicAI.
 #
-# NOT VERIFIED BY RUNNING IT. Docker is not installed on the machine this was
-# written on, so this file is reviewed against the application's actual
-# requirements rather than tested. Five defects in the previous version were found
-# that way and are fixed below; there may be more that only `docker compose up`
-# would show.
+# NOT VERIFIED BY RUNNING IT. This file is reviewed against the application's actual
+# requirements rather than tested — the machine it was written on has the docker
+# binary but no running daemon, no compose plugin, and a user outside the docker
+# group. Five defects in the previous version were found by review and are fixed
+# below; there may be more that only `docker compose up` would show.
+#
+# To verify it (Arch/CachyOS):
+#   sudo pacman -S --needed docker-compose
+#   sudo systemctl enable --now docker
+#   sudo usermod -aG docker "$USER"   # then log out and back in, or: newgrp docker
 #
 #   SECRET_KEY=$(openssl rand -hex 32) GEMINI_API_KEY=... docker compose up --build
 #
