@@ -69,6 +69,7 @@ cd backend
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env            # add GEMINI_API_KEY for anything live
 .venv/bin/python -m alembic upgrade head
+.venv/bin/python -m app.services.seed                    # tenant, departments, contractors
 .venv/bin/python -m app.ai.rag.ingest --collection all   # build the FAISS index
 .venv/bin/python -m uvicorn app.main:app --reload
 
@@ -77,6 +78,17 @@ cd frontend && npm install && npm run dev
 ```
 
 Seeded officer login: `admin@civicai.gov` / `admin123`.
+
+**Or in Docker**, which does the migrate/seed/serve sequence itself:
+
+```bash
+SECRET_KEY=$(openssl rand -hex 32) GEMINI_API_KEY=... docker compose up --build
+# frontend on :3000, API on :8000
+```
+
+The seed step is not optional. Without it there is no tenant, and a submitted
+complaint fails with "tenant is ambiguous" — the backend refusing to guess which
+municipality a report belongs to.
 
 Without a `GEMINI_API_KEY` the API still boots, the tests still pass, and complaint
 submission still works — the graph fails at its first model call and the complaint is

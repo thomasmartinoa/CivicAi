@@ -25,4 +25,8 @@ RUN mkdir -p /data
 # Migrations run on every start, not at build time: the database lives in a volume
 # that does not exist yet when the image is built. Alembic is idempotent, so a
 # restart against an up-to-date database is a no-op.
-CMD ["sh", "-c", "python -m alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# Migrate, then seed, then serve. Seeding is idempotent — seed_database returns early
+# when a tenant already exists — so this is a no-op after the first start. Without it a
+# fresh container has no tenant and no admin user, and the HTTP seed endpoint is gated
+# on ENVIRONMENT=development, so there would be no way to create either.
+CMD ["sh", "-c", "python -m alembic upgrade head && python -m app.services.seed && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]

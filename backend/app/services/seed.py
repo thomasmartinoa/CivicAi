@@ -90,3 +90,34 @@ def seed_database(db: Session) -> dict:
 
     db.commit()
     return {"message": "Database seeded successfully", "tenant_id": tenant.id}
+
+
+def main() -> None:
+    """`python -m app.services.seed` — seed a fresh database from the command line.
+
+    The HTTP endpoint (`POST /admin/seed`) is gated on `environment == "development"`,
+    which is right for an unauthenticated writer but leaves a container with no way to
+    create its first tenant: compose runs with `ENVIRONMENT=production` by default, so
+    a fresh stack came up with no tenant, no admin user and no route to either. A
+    complaint submitted to it failed with "tenant is ambiguous", and login failed
+    because the account did not exist.
+
+    This is a command rather than a startup hook so that seeding stays an explicit act.
+    `seed_database` returns early when a tenant already exists, so running it on every
+    container start is a no-op after the first.
+    """
+    import logging
+
+    from app.db.session import SessionLocal
+
+    logging.basicConfig(level=logging.INFO)
+    session = SessionLocal()
+    try:
+        result = seed_database(session)
+        logging.getLogger(__name__).info("seed: %s", result.get("message", "seeded"))
+    finally:
+        session.close()
+
+
+if __name__ == "__main__":
+    main()
