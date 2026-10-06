@@ -88,6 +88,71 @@ answers with no way to tell which was real.
   expose, but every tool here is tenant-bound and read-only *for an officer*; pointing
   an unauthenticated endpoint at them needs its own threat model.
 
-## Carried forward
+## Carried forward from Phase 4b
 
-Filled in when the phase lands.
+Landed 2026-10-06 across six commits (`62940b4`…`e5613e0`), 867 tests.
+
+### The two bugs the suite was blind to, and the one lesson
+
+Both found by the first live conversation, both invisible to 864 passing tests, and
+both the *same* mistake:
+
+- `search_policy` called the retriever with only `k`, where the protocol is
+  keyword-only in `k`, `fetch_k` and `filters`. Every call would have raised
+  `TypeError` in production. The test fake was declared `search(self, query, k=5)`.
+- The agent discarded its own answers. Gemini 3 returns `content` as a list of
+  content blocks, and both the collector and the stream tested
+  `isinstance(content, str)`. Every test used `AIMessage(content="a plain string")`.
+
+**A fake looser than the thing it stands in for converts a crash into a green suite.**
+CLAUDE.md already said this about `FakeEmbedder`; it was written twice more anyway, in
+one phase. The habit worth forming: when a fake stands in for an interface that has a
+declared signature or a provider-specific shape, copy that shape exactly, even when
+the looser version is easier to write.
+
+### What was deliberately not built
+
+- **Mutation tools.** No tool changes anything, because the spec defers
+  human-in-the-loop `interrupt()` approval to Phase 7 and there is therefore no
+  mechanism by which an officer confirms an agent action before it happens.
+- **Server-side conversation memory.** History arrives from the client each turn. A
+  session store is worth building when a screen needs one; until then the simplest
+  thing that cannot leak one officer's conversation into another's is to hold none.
+- **A public chat endpoint.** Every tool is tenant-bound and read-only *for an
+  officer*; pointing an unauthenticated endpoint at them needs its own threat model.
+
+### Known limits
+
+- **A turn costs three to four model calls, not one.** The model rephrases rather than
+  accepting its first result set — one policy question produced three `search_policy`
+  calls. At 0.2 requests per second that is a twenty-second answer and four of 500
+  daily calls. `MAX_AGENT_STEPS` bounds the worst case; nothing makes the common case
+  efficient. Caching repeated policy searches within a turn is the obvious next
+  improvement and was not attempted.
+- **Injection resistance is measured at n=1.** One live attempt was named and refused.
+  Phase 3 measured 1 in 6 injection items still moving a risk band in the pipeline,
+  and nothing suggests the chat surface is better. The structural defence — no tool
+  can name a tenant, no tool can write — does not depend on the model, and is the only
+  part of this that should be relied on.
+- **An officer cannot tell a surrender from a conclusion on screen.** `hit_step_limit`
+  reaches the stream and the transcript, but no UI renders it yet. Phase 5 must, or a
+  step-limit message will read as an answer.
+- **The transcript inherits an unanswered retention question.** `agent_steps` now
+  stores officer questions and tool results, and a tool result can contain a complaint
+  description written by a member of the public. Reviewability is the point; nothing in
+  this project says how long any of it is kept.
+- **`tenant_statistics` is the only tool that can report a null**, and the prompt is
+  the only thing stopping the model rendering it as a zero. There is a unit test on
+  the tool passing nulls through, and none on the model's behaviour — that would need
+  an LLM judge, which Phase 3 ruled out on cost.
+
+### Smaller things a reader will trip over
+
+- The `tool_call` event echoes the model's arguments verbatim, and `get_complaint`'s
+  refusal quotes back the tracking id it was asked for. Neither is a disclosure, but a
+  Phase 5 screen renders model-generated text and should escape it.
+- `OFFICER_CHAT` is on the flash tier despite being conversational prose, because the
+  strong tier's free quota is 20 a **day** and a ReAct turn is several calls.
+- The streaming generator must not use the request's session: a `StreamingResponse`
+  body runs after the route returns, by which point `Depends(get_db)` has closed.
+  `_session_factory()` is the seam, and it is also what makes the endpoint testable.

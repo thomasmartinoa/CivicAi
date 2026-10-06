@@ -26,13 +26,14 @@ it is where the known defects live.
 | 2c | Semantic clustering, daily briefing, officer email draft, scheduled jobs |
 | 3 | Golden set, three-column eval, judges, regression gate, observability |
 | 4a | Officer auth, the complaint queue, work orders, analytics, briefing, email approval, citizen OTP + tokens, the public dashboard |
-| 4b–6 | Officer ReAct agent (next), six frontend screens, polish and ADRs |
+| 4b | Officer ReAct agent: six read-only tenant-bound tools, the loop, `POST /admin/chat` over SSE, transcripts on `agent_runs`/`agent_steps` |
+| 5–6 | Six frontend screens (next), polish and ADRs |
 
 ## Commands
 
 ```bash
 cd backend
-.venv/bin/python -m pytest -q                       # 809 tests, no network, no key, ~16s
+.venv/bin/python -m pytest -q                       # 867 tests, no network, no key, ~17s
 .venv/bin/python -m uvicorn app.main:app --reload   # API on :8000
 .venv/bin/python -m alembic upgrade head            # 5 migrations
 .venv/bin/python -m app.ai.rag.ingest --collection all   # build the FAISS indexes
@@ -54,6 +55,8 @@ backend/app/
     graph/        state, nodes, edges, build, runner  — the pipeline
     prompts/      registry keyed on (name, version)
     rag/          embeddings, chunking, FAISS store, retrievers, ingest, cases, corpus/
+    agents/       officer_chat.py — the ReAct loop, the only LLM-driven control flow
+    tools/        officer.py — read-only, tenant-bound @tool functions
     llm.py        the ONLY module that builds a chat model
     cache.py      semantic cache
     observability.py  @traced, run metadata
@@ -98,6 +101,11 @@ at most `MAX_INVESTIGATE_TURNS` (3) times, widening its taxonomy search each tur
   `assess_risk` retrieves no precedent without one. An unscoped query spans tenants.
 - **`app/ai/` must not import `app/api/`**, and nothing may import `app/evals/`.
   `tests/test_import_rules.py` enforces both.
+- **No tool in `app/ai/tools/` may take a `tenant_id`, and none may write.** The
+  tenant is bound in a closure the model cannot reach, so no parameter exists for an
+  LLM to fill with somebody else's id — the agent's context contains complaint text
+  written by the public. Both rules have a test that was verified by breaking the code
+  and watching it fail.
 - **Prompts are versioned and old versions stay registered.** `classify` v1 and
   `assess_risk` v1 are the ungrounded baselines the eval compares against; deleting
   them would make that comparison unrepeatable.
@@ -123,18 +131,24 @@ day and leaves little over. `--flash-only` keeps a sweep off the strong tier.
 
 ## Testing
 
-809 tests, no network, no API key, about sixteen seconds. Three things to know:
+867 tests, no network, no API key, about seventeen seconds. Three things to know:
 
-- **Fakes everywhere.** `FakeEmbedder` is content-hashed, so only *identical* text is
-  similar under it — a similarity threshold tested with it is vacuous, which is why
+- **Fakes everywhere, and a fake looser than reality is worse than none.**
+  `FakeEmbedder` is content-hashed, so only *identical* text is similar under it — a
+  similarity threshold tested with it is vacuous, which is why
   `tests/services/test_clustering.py` carries a small bag-of-words embedder instead.
+  Phase 4b hit the sharper version of this twice: a retriever fake with a looser
+  signature than the real protocol, and a chat fake returning `content` as a string
+  where the provider returns a list of blocks. Both made a green suite over code that
+  could not run. **Copy the real signature and the real payload shape, even when the
+  loose version is easier.**
 - **Every unit test passing does not mean the system works.** All six production
   bugs this project has found came from live runs, never from the suite: retired
   model ids, no request timeout, `AgentRun.finished_at` landing before `started_at`,
   the rate limiter being bypassed by the provider client's own retries, a transient
-  503 permanently abandoning a complaint, and a resume that replayed the failed
-  node's cached error instead of retrying it. Run something real before trusting a
-  change.
+  503 permanently abandoning a complaint, a resume that replayed the failed node's
+  cached error instead of retrying it, and two Phase 4b bugs where the test fake was
+  looser than reality. Run something real before trusting a change.
 - **The eval harness is the other half of the test suite.** `app/evals/` measures
   what pytest cannot: whether retrieval helps, whether a threshold is right, whether
   a prompt change is an improvement or a trade. `docs/07-evaluation-and-observability.md`
