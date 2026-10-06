@@ -81,6 +81,57 @@ then `npm run build`, then a screenshot looked at before the commit.
 - **No design system.** The existing Tailwind vocabulary is adequate and consistent;
   rewriting it would bury the actual work in a restyle.
 
-## Carried forward
+## Carried forward from Phase 5
 
-Filled in when the phase lands.
+Landed 2026-10-06 across seven commits (`5b3538b`…`0959144`), 904 tests, six screens.
+
+### The rule worked
+
+Every screen was rendered in headless Chromium and looked at before its commit, and
+that found things no type check or curl could:
+
+- **The officer screens had no navigation at all.** Queue, work orders and the
+  assistant were reachable only by typing URLs.
+- **A failed fetch hung the chat screen for ever** — `await fetch(...)` sat outside
+  the try block, so `busy` stayed true and the composer stayed disabled with no error
+  and no way to retry.
+- **CORS did not allow the preview origin**, which fails as a blocked preflight in the
+  browser and as nothing at all in the server log.
+- **Seven trace rows all read "conversation"**, with nothing to tell them apart.
+- **The complaint detail screen read `ai_analysis`**, a nested object the v2 API has
+  never sent, guarded by a length check — so it rendered nothing and looked like a
+  complaint with no analysis rather than a screen reading a field that does not exist.
+  Four phases of grounding work were invisible behind a passing type check, because
+  the value was typed `any`.
+
+The tooling that made this possible is a small CDP driver (`websockets` over
+Chromium's debugging port) that types, clicks and screenshots. It lives in the
+scratchpad, not the repo — **worth promoting into `scripts/` if Phase 6 wants
+screenshots kept current.**
+
+### What was deliberately not built
+
+- **No reindex button.** Rebuilding the index is destructive to the thing every
+  grounded decision depends on, and this codebase still has no confirmation mechanism
+  — the same argument that kept mutation tools out of the officer agent. A test
+  asserts the only corpus route is a `GET`.
+- **No new citizen screens.** Rating, fix verification and the completion photo need
+  their three endpoints first.
+
+### Known limits
+
+- **The step-limit treatment is coded but never seen.** A surrender renders amber and
+  captioned "Gave up — not an answer", and triggering it needs a genuinely confused
+  agent. Covered by backend tests, not by a screenshot.
+- **`dist/_devlogin.html` is a screenshot aid**, written and deleted around each
+  capture. It seeds a token into `localStorage` for the preview origin. It is never
+  committed (`dist/` is gitignored), but anyone automating this should know it exists
+  rather than rediscover it.
+- **The trace viewer polls every 15 seconds.** Fine for a handful of runs; a busy
+  tenant wants the WebSocket the pipeline already has.
+- **No frontend tests.** The screens are verified by rendering and looking, which
+  caught five real bugs here but does not survive a refactor. Component tests are a
+  Phase 6 question.
+- **The chat screen holds its conversation in component state**, so navigating away
+  loses it. Server-side sessions were deferred in Phase 4b and the screen now makes
+  that visible.

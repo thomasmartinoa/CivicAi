@@ -27,25 +27,30 @@ it is where the known defects live.
 | 3 | Golden set, three-column eval, judges, regression gate, observability |
 | 4a | Officer auth, the complaint queue, work orders, analytics, briefing, email approval, citizen OTP + tokens, the public dashboard |
 | 4b | Officer ReAct agent: six read-only tenant-bound tools, the loop, `POST /admin/chat` over SSE, transcripts on `agent_runs`/`agent_steps` |
-| 5–6 | Six frontend screens (next), polish and ADRs |
+| 5 | Six screens: officer chat, agent traces, evidence panel, live pipeline, knowledge base, evaluation — each rendered and looked at |
+| 6 | Polish, ADRs, docker-compose (next) |
 
 ## Commands
 
 ```bash
 cd backend
-.venv/bin/python -m pytest -q                       # 867 tests, no network, no key, ~17s
+.venv/bin/python -m pytest -q                       # 904 tests, no network, no key, ~20s
 .venv/bin/python -m uvicorn app.main:app --reload   # API on :8000
 .venv/bin/python -m alembic upgrade head            # 5 migrations
 .venv/bin/python -m app.ai.rag.ingest --collection all   # build the FAISS indexes
 .venv/bin/python -m app.evals.run --config all --flash-only --resume  # the eval sweep
 ```
 
-The frontend under `frontend/` is **still v1-era**, but it now builds (`npm install
-&& npm run build`) and 18 of the 21 endpoints it calls exist. The three that do not
-are the citizen feedback loop, listed in Phase 4a's carried-forward section. Where it
-disagrees with the API, the API is right: its pipeline-stage names are v1's, and it
-sends an `email` query parameter to `/complaints/my` that the server deliberately
-ignores.
+The frontend under `frontend/` has twelve screens and builds clean. Phase 5 rebuilt
+six of them against the real API and added officer navigation; the citizen feedback
+screens still call three endpoints that do not exist (rating, fix verification,
+completion photo — see Phase 4a's carried-forward).
+
+**A screen is not done until it has been rendered and looked at.** Phase 5 verified
+every screen in headless Chromium against a live backend, which found five bugs that
+`tsc` and curl both missed — including a detail screen that read a field the v2 API
+has never sent, hiding four phases of grounding work behind a passing type check.
+Screenshots are in `docs/screenshots/`.
 
 ## Architecture
 
@@ -131,7 +136,7 @@ day and leaves little over. `--flash-only` keeps a sweep off the strong tier.
 
 ## Testing
 
-867 tests, no network, no API key, about seventeen seconds. Three things to know:
+904 tests, no network, no API key, about twenty seconds. Three things to know:
 
 - **Fakes everywhere, and a fake looser than reality is worse than none.**
   `FakeEmbedder` is content-hashed, so only *identical* text is similar under it — a
