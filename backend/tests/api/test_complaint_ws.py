@@ -1,18 +1,29 @@
+from app.db.models.complaint import Complaint
 from app.services.streaming import registry
 
 
-def test_connecting_to_ws_registers_a_subscriber(client):
+def test_connecting_to_ws_registers_a_subscriber(client, db_session):
     """The citizen connects to the WebSocket and receives streaming updates.
 
     We test connection/disconnection here; actual message delivery is covered
     in test_streaming.py where we can drive it directly without TestClient's
     synchronous context constraints.
+
+    The complaint is inserted directly rather than submitted through the API. Posting
+    it schedules a real background pipeline run, and that run publishes node updates
+    to `registry` for this very tracking id — so a publish landing mid-test could
+    drop the socket under assertion, because `publish` disconnects any subscriber
+    whose `send_json` raises. This test failed once that way in a full-suite run and
+    could not be reproduced in twelve isolated runs, six api-suite runs or four
+    further full-suite runs; the race is real whether or not it was the cause, and a
+    test asserting on registry bookkeeping has no reason to start a pipeline.
     """
-    tracking_id = client.post(
-        "/complaints/",
-        data={"description": "A large pothole on the main road near the school",
-              "citizen_email": "a@b.com"},
-    ).json()["tracking_id"]
+    complaint = Complaint(tracking_id="CIV-WSTEST01", citizen_email="a@b.com",
+                          description="A large pothole near the school",
+                          status="submitted")
+    db_session.add(complaint)
+    db_session.commit()
+    tracking_id = complaint.tracking_id
 
     # Initially no subscribers
     assert registry.subscriber_count(tracking_id) == 0
